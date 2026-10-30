@@ -21,7 +21,7 @@ ssh-copy-id debian@IP_DU_VPS
 ssh debian@IP_DU_VPS
 
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y ufw unattended-upgrades python3-venv git curl debian-keyring debian-archive-keyring apt-transport-https curl
+sudo apt install -y ufw unattended-upgrades python3-venv git curl debian-keyring debian-archive-keyring apt-transport-https
 
 # pare-feu : SSH + HTTP (certificat) + HTTPS uniquement
 sudo ufw allow OpenSSH
