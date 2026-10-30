@@ -23,6 +23,8 @@ from .telegram import TelegramBot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("devoir")
+# httpx écrit chaque URL appelée : celles de Telegram contiennent le jeton du bot.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
