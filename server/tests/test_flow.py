@@ -278,3 +278,21 @@ async def test_llm_failure_retries_without_spam(env):
     await service.tick()
     await service.wait_background()
     assert service.db.get_submission(sub_id)["status"] == "valide"
+
+
+async def test_shortcut_status_and_student_page(env):
+    service, tutor, bot, clock, client = env
+    assert client.get("/api/statut", params={"k": "faux"}).status_code == 401
+    assert client.get("/api/statut", params={"k": "secret"}).text == "bloque"
+    await service.ensure_today_assignment()
+    sub_id = (await service.create_submission([jpeg()]))["submission_id"]
+    assert client.get("/api/statut", params={"k": "secret"}).text == "bloque"
+    service.decide(sub_id, True, "parent")
+    assert client.get("/api/statut", params={"k": "secret"}).text == "libre"
+    clock.now += timedelta(days=1)
+    assert client.get("/api/statut", params={"k": "secret"}).text == "bloque"
+
+    page = client.get("/eleve")
+    assert page.status_code == 200 and "Devoir du jour" in page.text
+    assert client.get("/static/katex.min.js").status_code == 200
+    assert client.get("/manifest.webmanifest").json()["start_url"] == "/eleve"

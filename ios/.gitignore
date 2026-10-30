@@ -1,9 +1,0 @@
-Config.xcconfig
-*.xcodeproj
-xcuserdata/
-build/
-DerivedData/
-App/Info.plist
-Monitor/Info.plist
-ShieldUI/Info.plist
-*.entitlements

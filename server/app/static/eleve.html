@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Devoir">
+<meta name="theme-color" content="#1e5aa8">
+<link rel="apple-touch-icon" href="/static/icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>Devoir du jour</title>
+<link rel="stylesheet" href="/static/katex.min.css">
+<script src="/static/katex.min.js"></script>
+<script src="/static/marked.min.js"></script>
+<style>
+  :root { --fond: #fff; --texte: #1b1b1f; --doux: #666; --carte: #f3f4f7; --bleu: #1e5aa8; --ok: #d7f5dd; --attente: #ffe9c7; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fond: #121316; --texte: #ececf1; --doux: #a0a0a8; --carte: #1f2026; --ok: #1f4d2a; --attente: #4d3a17; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fond); color: var(--texte); font: 17px/1.5 -apple-system, system-ui, sans-serif;
+         padding: max(12px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+  h1 { font-size: 1.4em; margin: 0 0 10px; }
+  h2 { font-size: 1.15em; margin: 0.2em 0 0.4em; }
+  .statut { padding: 10px 12px; border-radius: 10px; background: var(--attente); margin-bottom: 12px; white-space: pre-line; }
+  .statut.ok { background: var(--ok); }
+  .carte { background: var(--carte); border-radius: 10px; padding: 12px; margin-bottom: 12px; overflow-wrap: anywhere; }
+  .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+  .meta, .petit { color: var(--doux); font-size: 0.9em; }
+  button, .bouton { display: block; width: 100%; padding: 13px; margin: 8px 0; border: 0; border-radius: 10px;
+           font: inherit; font-weight: 600; text-align: center; background: var(--bleu); color: #fff; }
+  button.secondaire { background: var(--carte); color: var(--texte); }
+  button:disabled { opacity: 0.45; }
+  input[type=password] { width: 100%; padding: 12px; font: inherit; border-radius: 10px; border: 1px solid var(--doux);
+           background: var(--fond); color: var(--texte); }
+  .vignettes { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+  .vignettes img { width: 64px; height: 84px; object-fit: cover; border-radius: 6px; }
+  .cache { display: none; }
+</style>
+</head>
+<body>
+<h1>Devoir du jour</h1>
+
+<div id="connexion" class="cache">
+  <p>Entre le code d'accès donné par tes parents.</p>
+  <input id="code" type="password" autocomplete="off">
+  <button id="valider-code">Valider</button>
+</div>
+
+<div id="principal" class="cache">
+  <div id="statut" class="statut">Connexion au serveur…</div>
+  <div id="devoir" class="carte cache"></div>
+  <div id="envoi" class="cache">
+    <div class="vignettes" id="vignettes"></div>
+    <div class="petit" id="nb-pages">Aucune page photographiée</div>
+    <label class="bouton" for="photo">📷 Photographier une page</label>
+    <input id="photo" class="cache" type="file" accept="image/*" capture="environment">
+    <button id="envoyer" disabled>Envoyer</button>
+    <button id="effacer" class="secondaire" disabled>Effacer les pages</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+const POLL_MS = 30000;
+const MAX_COTE = 2000;
+let pages = [];        // Blobs JPEG prêts à envoyer
+let envoiEnCours = false;
+let dernierEnonce = null;
+
+// Le code d'accès peut venir du lien (#k=...), sinon du stockage local.
+function lireCode() {
+  const m = location.hash.match(/k=([^&]+)/);
+  if (m) {
+    const code = decodeURIComponent(m[1]);
+    try { localStorage.setItem("code", code); } catch (e) {}
+    return code;
+  }
+  try { return localStorage.getItem("code"); } catch (e) { return null; }
+}
+let code = lireCode();
+
+const $ = (id) => document.getElementById(id);
+
+function afficher(id, visible) { $(id).classList.toggle("cache", !visible); }
+
+async function api(chemin, options = {}) {
+  const r = await fetch(chemin, { ...options, headers: { Authorization: "Bearer " + code } });
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401) { demanderCode(); throw new Error("Code d'accès invalide"); }
+  if (!r.ok) throw new Error(data.detail || "Erreur serveur (" + r.status + ")");
+  return data;
+}
+
+function demanderCode() {
+  afficher("connexion", true);
+  afficher("principal", false);
+}
+
+// Formules extraites avant Markdown (sinon « _ » et « * » seraient pris pour de l'italique).
+function rendreEnonce(etat) {
+  const maths = [];
+  const src = etat.enonce.replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g, (_, bloc, ligne) => {
+    maths.push({ tex: bloc !== undefined ? bloc : ligne, display: bloc !== undefined });
+    return "@@MATH" + (maths.length - 1) + "@@";
+  });
+  let html = marked.parse(src);
+  html = html.replace(/@@MATH(\d+)@@/g, (_, i) => {
+    const m = maths[+i];
+    return katex.renderToString(m.tex, { displayMode: m.display, throwOnError: false });
+  });
+  const titre = document.createElement("h2");
+  titre.textContent = etat.titre;
+  $("devoir").innerHTML = (etat.duree_min ? '<div class="meta">Durée indicative : ' + etat.duree_min + " min</div>" : "") + html;
+  $("devoir").prepend(titre);
+}
+
+function messageStatut(etat) {
+  switch (etat.status) {
+    case "valide": return "✅ Devoir du jour validé. Le téléphone est débloqué jusqu'à minuit.";
+    case "en_preparation": return "Le devoir du jour est en préparation…";
+    case "en_correction": return "⏳ Copie envoyée, en attente de correction. Tu peux renvoyer une version corrigée si besoin.";
+  }
+  const copie = etat.derniere_copie;
+  if (copie && copie.status === "refuse") {
+    return "❌ Copie refusée. " + (copie.feedback || "Reprends le devoir et renvoie-le.");
+  }
+  return "Fais le devoir sur ton cahier, photographie chaque page puis envoie.";
+}
+
+async function synchroniser() {
+  if (!code) return;
+  try {
+    const etat = await api("/api/today");
+    $("statut").textContent = messageStatut(etat);
+    $("statut").classList.toggle("ok", etat.status === "valide");
+    afficher("envoi", etat.status === "a_faire" || etat.status === "en_correction");
+    if (etat.enonce && etat.enonce !== dernierEnonce) {
+      rendreEnonce(etat);
+      dernierEnonce = etat.enonce;
+    }
+    afficher("devoir", !!etat.enonce);
+  } catch (e) {
+    $("statut").textContent = "Hors ligne : " + e.message;
+    $("statut").classList.remove("ok");
+  }
+}
+
+// Réduit la photo à 2000 px et la convertit en JPEG (l'iPhone prend des photos HEIC très lourdes).
+function preparerPhoto(fichier) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const echelle = Math.min(1, MAX_COTE / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.naturalWidth * echelle);
+      canvas.height = Math.round(img.naturalHeight * echelle);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(img.src);
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Conversion impossible"))), "image/jpeg", 0.85);
+    };
+    img.onerror = () => reject(new Error("Photo illisible"));
+    img.src = URL.createObjectURL(fichier);
+  });
+}
+
+function majPages() {
+  $("vignettes").innerHTML = "";
+  for (const p of pages) {
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(p);
+    $("vignettes").append(img);
+  }
+  $("nb-pages").textContent = pages.length ? pages.length + " page(s) prête(s) à envoyer" : "Aucune page photographiée";
+  $("envoyer").disabled = !pages.length || envoiEnCours;
+  $("effacer").disabled = !pages.length || envoiEnCours;
+  $("envoyer").textContent = envoiEnCours ? "Envoi…" : "Envoyer";
+}
+
+$("photo").addEventListener("change", async (ev) => {
+  for (const f of ev.target.files) {
+    try { pages.push(await preparerPhoto(f)); } catch (e) { alert(e.message); }
+  }
+  ev.target.value = "";
+  majPages();
+});
+
+$("effacer").addEventListener("click", () => { pages = []; majPages(); });
+
+$("envoyer").addEventListener("click", async () => {
+  envoiEnCours = true;
+  majPages();
+  const form = new FormData();
+  pages.forEach((p, i) => form.append("photos", p, "page" + (i + 1) + ".jpg"));
+  try {
+    await api("/api/today/submissions", { method: "POST", body: form });
+    pages = [];
+    alert("Copie envoyée");
+  } catch (e) {
+    alert("Envoi impossible : " + e.message);
+  }
+  envoiEnCours = false;
+  majPages();
+  synchroniser();
+});
+
+$("valider-code").addEventListener("click", () => {
+  code = $("code").value.trim();
+  try { localStorage.setItem("code", code); } catch (e) {}
+  afficher("connexion", false);
+  afficher("principal", true);
+  synchroniser();
+});
+
+document.addEventListener("visibilitychange", () => { if (!document.hidden) synchroniser(); });
+
+if (code) {
+  afficher("principal", true);
+  synchroniser();
+} else {
+  demanderCode();
+}
+setInterval(() => { if (!document.hidden) synchroniser(); }, POLL_MS);
+</script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-"""Point d'entrée : API pour l'app iPhone + bot Telegram + boucle périodique.
+"""Point d'entrée : page web de l'élève + API + bot Telegram + boucle périodique.
 
 Lancement : uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
@@ -7,9 +7,12 @@ import asyncio
 import hmac
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import load_settings
 from .db import Database
@@ -20,6 +23,8 @@ from .telegram import TelegramBot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("devoir")
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 async def telegram_loop(service: Service, bot: TelegramBot) -> None:
@@ -107,6 +112,34 @@ def create_app(service: Service | None = None, bot: TelegramBot | None = None, b
         if not authorization or not hmac.compare_digest(authorization.encode(), expected.encode()):
             raise HTTPException(status_code=401, detail="Jeton d'appareil invalide")
         return svc
+
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/eleve")
+    def student_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "eleve.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/manifest.webmanifest")
+    def manifest() -> JSONResponse:
+        return JSONResponse(
+            {
+                "name": "Devoir du jour",
+                "short_name": "Devoir",
+                "start_url": "/eleve",
+                "display": "standalone",
+                "background_color": "#ffffff",
+                "theme_color": "#1e5aa8",
+                "icons": [{"src": "/static/icon.png", "sizes": "512x512", "type": "image/png"}],
+            },
+            media_type="application/manifest+json",
+        )
+
+    @app.get("/api/statut", response_class=PlainTextResponse)
+    async def shortcut_status(k: Annotated[str, Query()], svc: Service = Depends(get_service)) -> str:
+        """Pour l'app Raccourcis : « libre » ou « bloque », en texte brut (aucun des deux ne contient l'autre)."""
+        if not hmac.compare_digest(k.encode(), svc.s.device_token.encode()):
+            raise HTTPException(status_code=401, detail="Jeton d'appareil invalide")
+        return "libre" if svc.device_state()["status"] == "valide" else "bloque"
 
     @app.get("/health")
     def health() -> dict:
