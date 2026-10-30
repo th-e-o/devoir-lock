@@ -21,7 +21,7 @@ ssh-copy-id debian@IP_DU_VPS
 ssh debian@IP_DU_VPS
 
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y ufw unattended-upgrades python3-venv git debian-keyring debian-archive-keyring apt-transport-https curl
+sudo apt install -y ufw unattended-upgrades python3-venv git curl debian-keyring debian-archive-keyring apt-transport-https curl
 
 # pare-feu : SSH + HTTP (certificat) + HTTPS uniquement
 sudo ufw allow OpenSSH
@@ -35,25 +35,49 @@ sudo systemctl restart ssh
 
 ## 3. Installer le serveur
 
+### 3a. Utilisateur dédié et clé de déploiement GitHub
+
+Le dépôt est privé : le VPS a besoin d'une clé de lecture seule (*deploy key*).
+
 ```bash
-sudo useradd --system --create-home --home-dir /opt/devoir-lock --shell /usr/sbin/nologin devoir
-sudo -u devoir git clone https://github.com/VOTRE-COMPTE/devoir-lock.git /opt/devoir-lock
+sudo useradd --system --create-home --home-dir /home/devoir --shell /usr/sbin/nologin devoir
+sudo -u devoir mkdir -p -m 700 /home/devoir/.ssh
+sudo -u devoir ssh-keygen -t ed25519 -N "" -C "vps-devoir" -f /home/devoir/.ssh/id_ed25519
+sudo cat /home/devoir/.ssh/id_ed25519.pub
+```
+
+Copiez la ligne affichée (`ssh-ed25519 AAAA… vps-devoir`), puis sur GitHub : dépôt `devoir-lock` >
+**Settings > Deploy keys > Add deploy key**. Titre « VPS OVH », collez la clé, et laissez
+*Allow write access* **décoché**.
+
+### 3b. Récupérer le code et installer Python
+
+```bash
+sudo install -d -o devoir -g devoir /opt/devoir-lock
+sudo -u devoir env GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" \
+    git clone git@github.com:th-e-o/devoir-lock.git /opt/devoir-lock
 cd /opt/devoir-lock/server
 sudo -u devoir python3 -m venv .venv
 sudo -u devoir .venv/bin/pip install -r requirements.txt
+```
 
+### 3c. Configuration et démarrage
+
+```bash
 sudo -u devoir cp .env.example .env
-sudo -u devoir nano .env     # ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, DEVICE_TOKEN, DATA_DIR=/opt/devoir-lock/data
 sudo chmod 600 .env
+sudo nano .env
+```
 
+Dans `nano`, remplissez `ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN` et `DEVICE_TOKEN`, et laissez
+`DATA_DIR=./data`. Pour enregistrer : Ctrl+O, Entrée, puis Ctrl+X pour quitter.
+
+```bash
 sudo cp deploy/devoir.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now devoir
 journalctl -u devoir -f      # vérifier le démarrage (Ctrl+C pour quitter)
 ```
-
-Le dépôt GitHub est privé : pour `git clone`, créez une *deploy key* en lecture seule
-(GitHub > dépôt > Settings > Deploy keys), ou copiez le dossier avec `scp`.
 
 ## 4. HTTPS avec Caddy
 
@@ -78,6 +102,6 @@ Vérification depuis n'importe où : `https://devoir.deltastat.fr/health` doit a
 
 - **Mettre à jour** :
   `cd /opt/devoir-lock && sudo -u devoir git pull && sudo systemctl restart devoir`
-- **Sauvegarder** `/opt/devoir-lock/data`. Ce dossier contient la base (programme, historique) et
+- **Sauvegarder** `/opt/devoir-lock/server/data`. Ce dossier contient la base (programme, historique) et
   les photos des copies.
 - **Logs** : `journalctl -u devoir --since today`
