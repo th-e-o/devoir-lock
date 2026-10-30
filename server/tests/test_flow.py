@@ -16,7 +16,7 @@ from app.service import Service
 from app.signing import Signer
 
 TZ = ZoneInfo("Europe/Paris")
-PARENT = 111
+PROF = 111
 
 
 class FakeTutor:
@@ -25,10 +25,16 @@ class FakeTutor:
         self.generated = 0
         self.consignes = []
         self.chat_calls = []
+        self.sujets = []
+        self.reglages = []
+        self.programmes = []
 
-    async def generate_assignment(self, programme, history, consignes=None):
+    async def generate_assignment(self, programme, history, reglages, consignes=None, sujet=None):
         self.generated += 1
         self.consignes.append(consignes)
+        self.sujets.append(sujet)
+        self.reglages.append(reglages)
+        self.programmes.append(programme)
         return {
             "titre": f"Suites récurrentes #{self.generated}",
             "notions": ["suites"],
@@ -38,17 +44,17 @@ class FakeTutor:
             "duree_estimee_min": 45,
         }
 
-    async def grade(self, assignment, photos):
+    async def grade(self, assignment, photos, reglages):
         assert photos and all(p[:2] == b"\xff\xd8" for p in photos)  # JPEG
         return {
             "verdict": self.verdict,
             "note_sur_20": 15 if self.verdict == "valide" else 6,
-            "resume_parent": "Résumé",
+            "resume_prof": "Résumé",
             "retour_eleve": "Bien" if self.verdict == "valide" else "Refais la Q2",
             "points_a_revoir": [],
         }
 
-    async def supervisor_turn(self, history, user_text, run_tool):
+    async def supervisor_turn(self, history, user_text, run_tool, reglages):
         self.chat_calls.append((len(history), user_text))
         result = await run_tool("modifier_programme", {"texte": f"Programme : {user_text}"})
         return [
@@ -100,7 +106,7 @@ def env(tmp_path):
         device_token="secret",
         device_id="tel",
         telegram_token="x",
-        parent_chat_ids=frozenset({PARENT}),
+        prof_chat_ids=frozenset({PROF}),
     )
     clock = Clock()
     tutor, bot = FakeTutor(), FakeBot()
@@ -117,12 +123,12 @@ AUTH = {"Authorization": "Bearer secret"}
 
 def callback(service, data, msg_id=1):
     return service.handle_update(
-        {"callback_query": {"id": "cb", "data": data, "message": {"chat": {"id": PARENT}, "message_id": msg_id}}}
+        {"callback_query": {"id": "cb", "data": data, "message": {"chat": {"id": PROF}, "message_id": msg_id}}}
     )
 
 
 def message(service, text, reply_to=None):
-    msg = {"chat": {"id": PARENT}, "text": text}
+    msg = {"chat": {"id": PROF}, "text": text}
     if reply_to:
         msg["reply_to_message"] = {"message_id": reply_to}
     return service.handle_update({"message": msg})
@@ -134,7 +140,7 @@ def test_auth_required(env):
     assert client.get("/api/today", headers={"Authorization": "Bearer faux"}).status_code == 401
 
 
-async def test_parent_validates(env):
+async def test_prof_validates(env):
     service, tutor, bot, clock, client = env
     await service.ensure_today_assignment()
     state = client.get("/api/today", headers=AUTH).json()
@@ -144,7 +150,7 @@ async def test_parent_validates(env):
     r = client.post("/api/today/submissions", headers=AUTH, files=[("photos", ("a.jpg", jpeg())), ("photos", ("b.jpg", jpeg()))])
     assert r.status_code == 200, r.text
     sub_id = r.json()["submission_id"]
-    assert bot.photos == [(PARENT, 2)]
+    assert bot.photos == [(PROF, 2)]
     assert bot.sent[-1]["keyboard"][0][0]["callback_data"] == f"ok:{sub_id}"
     assert client.get("/api/today", headers=AUTH).json()["status"] == "en_correction"
 
@@ -158,10 +164,10 @@ async def test_parent_validates(env):
     clock.now += timedelta(minutes=16)
     await service.tick()
     await service.wait_background()
-    assert service.db.get_submission(sub_id)["decided_by"] == "parent"
+    assert service.db.get_submission(sub_id)["decided_by"] == "prof"
 
 
-async def test_parent_refuses_with_feedback(env):
+async def test_prof_refuses_with_feedback(env):
     service, tutor, bot, clock, client = env
     await service.ensure_today_assignment()
     sub_id = (await service.create_submission([jpeg()]))["submission_id"]
@@ -191,12 +197,12 @@ async def test_llm_after_timeout(env):
     assert (sub["status"], sub["decided_by"], sub["feedback"]) == ("refuse", "llm", "Refais la Q2")
     assert json.loads(sub["llm_report"])["note_sur_20"] == 6
 
-    # Le parent peut renverser la décision de l'IA.
+    # Le professeur peut renverser la décision de l'IA.
     await callback(service, f"ok:{sub_id}")
     assert service.device_state()["status"] == "valide"
 
 
-async def test_llm_validates_then_parent_cancels(env):
+async def test_llm_validates_then_prof_cancels(env):
     service, tutor, bot, clock, client = env
     await service.ensure_today_assignment()
     sub_id = (await service.create_submission([jpeg()]))["submission_id"]
@@ -213,14 +219,14 @@ async def test_new_submission_replaces_pending(env):
     await service.ensure_today_assignment()
     first = (await service.create_submission([jpeg()]))["submission_id"]
     await service.create_submission([jpeg()])
-    assert service.decide(first, True, "parent") == "Cette copie a été remplacée par une plus récente."
+    assert service.decide(first, True, "prof") == "Cette copie a été remplacée par une plus récente."
 
 
 async def test_next_day_relocks(env):
     service, tutor, bot, clock, client = env
     await service.ensure_today_assignment()
     sub_id = (await service.create_submission([jpeg()]))["submission_id"]
-    service.decide(sub_id, True, "parent")
+    service.decide(sub_id, True, "prof")
     assert service.device_state()["status"] == "valide"
     clock.now += timedelta(days=1)
     assert service.device_state()["status"] == "en_preparation"
@@ -287,7 +293,7 @@ async def test_shortcut_status_and_student_page(env):
     await service.ensure_today_assignment()
     sub_id = (await service.create_submission([jpeg()]))["submission_id"]
     assert client.get("/api/statut", params={"k": "secret"}).text == "bloque"
-    service.decide(sub_id, True, "parent")
+    service.decide(sub_id, True, "prof")
     assert client.get("/api/statut", params={"k": "secret"}).text == "libre"
     clock.now += timedelta(days=1)
     assert client.get("/api/statut", params={"k": "secret"}).text == "bloque"
@@ -296,3 +302,80 @@ async def test_shortcut_status_and_student_page(env):
     assert page.status_code == 200 and "Devoir du jour" in page.text
     assert client.get("/static/katex.min.js").status_code == 200
     assert client.get("/manifest.webmanifest").json()["start_url"] == "/eleve"
+
+
+async def test_default_programme_and_settings(env):
+    service, tutor, bot, clock, client = env
+    await service.ensure_today_assignment()
+    assert "début de première année" in tutor.programmes[-1]
+    assert tutor.reglages[-1]["duree_min"] == 30
+    assert "début" in tutor.reglages[-1]["niveau"]
+    service.set_reglages("MPSI, second semestre", 40)
+    clock.now += timedelta(days=1)
+    await service.ensure_today_assignment()
+    assert tutor.reglages[-1] == {"niveau": "MPSI, second semestre", "duree_min": 40}
+    with pytest.raises(ValueError):
+        service.set_reglages("x", 500)
+
+
+async def test_suggested_subjects_used_in_order(env):
+    service, tutor, bot, clock, client = env
+    await message(service, "/sujet récurrence forte")
+    service.add_suggestion("sommes télescopiques")
+    await service.ensure_today_assignment()
+    assert tutor.sujets[-1] == "récurrence forte"
+    # Régénérer le même jour garde le même sujet.
+    await service.ensure_today_assignment(consignes="plus court", force=True)
+    assert tutor.sujets[-1] == "récurrence forte"
+    clock.now += timedelta(days=1)
+    await service.ensure_today_assignment()
+    assert tutor.sujets[-1] == "sommes télescopiques"
+    clock.now += timedelta(days=1)
+    await service.ensure_today_assignment()
+    assert tutor.sujets[-1] is None
+
+
+async def test_prof_interface(env):
+    service, tutor, bot, clock, client = env
+    await message(service, "/prof")
+    link = bot.sent[-1]["text"]
+    token = link.split("#k=")[1].split()[0]
+    assert token == service.prof_token()
+    auth = {"Authorization": f"Bearer {token}"}
+
+    assert client.get("/api/prof").status_code == 401
+    assert client.get("/api/prof", headers=AUTH).status_code == 401  # le code élève ne suffit pas
+    assert client.get("/prof").status_code == 200
+
+    r = client.put("/api/prof/reglages", headers=auth, json={"niveau": "début de MPSI", "duree_min": 25})
+    assert r.status_code == 200 and r.json()["duree_min"] == 25
+    assert client.put("/api/prof/reglages", headers=auth, json={"niveau": "", "duree_min": 25}).status_code == 400
+
+    sid = client.post("/api/prof/sujets", headers=auth, json={"texte": "nombres complexes"}).json()["id"]
+    client.post("/api/prof/sujets", headers=auth, json={"texte": "binôme"})
+    client.delete(f"/api/prof/sujets/{sid}", headers=auth)
+    client.put("/api/prof/programme", headers=auth, json={"texte": "Chapitre 1 : logique"})
+
+    state = client.post("/api/prof/regenerer", headers=auth, json={"consignes": "plus facile"}).json()
+    assert tutor.sujets[-1] == "binôme" and tutor.consignes[-1] == "plus facile"
+    assert tutor.programmes[-1] == "Chapitre 1 : logique"
+    assert state["devoir"]["corrige"] and state["reglages"]["duree_min"] == 25 and state["sujets"] == []
+
+    assert "débloqué" in client.post("/api/prof/debloquer", headers=auth).json()["message"]
+    assert client.get("/api/statut", params={"k": "secret"}).text == "libre"
+
+    # Nouveau lien : l'ancien ne marche plus.
+    await message(service, "/prof nouveau")
+    assert client.get("/api/prof", headers=auth).status_code == 401
+
+
+def test_parent_chat_ids_still_accepted(monkeypatch, tmp_path):
+    from app.config import load_settings
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DEVICE_TOKEN", "x")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
+    monkeypatch.delenv("PROF_CHAT_IDS", raising=False)
+    monkeypatch.setenv("PARENT_CHAT_IDS", "12, 34")
+    assert load_settings().prof_chat_ids == {12, 34}
+    monkeypatch.setenv("PROF_CHAT_IDS", "56")
+    assert load_settings().prof_chat_ids == {56}

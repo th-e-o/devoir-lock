@@ -94,13 +94,29 @@ Vérification depuis n'importe où : `https://devoir.deltastat.fr/health` doit a
 
 ## 5. Finaliser
 
-- Envoyez `/start` au bot Telegram, mettez l'identifiant obtenu dans `PARENT_CHAT_IDS` (`.env`),
+- Envoyez `/start` au bot Telegram, mettez l'identifiant obtenu dans `PROF_CHAT_IDS` (`.env`),
   puis `sudo systemctl restart devoir`.
 - L’adresse `https://devoir.deltastat.fr` est déjà renseignée dans le README (page élève et Raccourci).
 
+## 6. Mises à jour automatiques
+
+Toutes les 5 minutes, le VPS regarde s'il y a un nouveau commit sur `main`. S'il y en a un, il lance
+les tests dans une copie à part, installe la nouvelle version seulement s'ils passent, vérifie que le
+serveur répond, et vous prévient sur Telegram. Si le serveur ne répond plus, il revient à la version
+précédente.
+
+```bash
+sudo cp /opt/devoir-lock/server/deploy/devoir-update.service /opt/devoir-lock/server/deploy/devoir-update.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now devoir-update.timer
+```
+
+Pour vérifier : `systemctl list-timers devoir-update.timer` (prochain passage) et
+`sudo journalctl -u devoir-update -n 30` (dernières exécutions).
+
 ## Entretien
 
-- **Mettre à jour** :
+- **Mettre à jour à la main** (inutile avec l'étape 6) :
   `cd /opt/devoir-lock && sudo -u devoir git pull && sudo systemctl restart devoir`
 - **Sauvegarder** `/opt/devoir-lock/server/data`. Ce dossier contient la base (programme, historique) et
   les photos des copies.

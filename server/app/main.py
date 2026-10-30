@@ -10,13 +10,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_settings
 from .db import Database
-from .llm import ClaudeTutor
+from .llm import ClaudeTutor, LLMError
 from .service import Service
 from .signing import Signer
 from .telegram import TelegramBot
@@ -76,7 +76,7 @@ def build_service() -> tuple[Service, TelegramBot]:
         settings=settings,
         db=Database(settings.db_path),
         signer=Signer(settings.key_path),
-        tutor=ClaudeTutor(settings.model, settings.student_level, settings.target_minutes),
+        tutor=ClaudeTutor(settings.model),
         bot=bot,
     )
     return service, bot
@@ -116,6 +116,73 @@ def create_app(service: Service | None = None, bot: TelegramBot | None = None, b
         return svc
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.middleware("http")
+    async def remember_public_url(request: Request, call_next):
+        # Adresse publique (vue derrière Caddy), pour le lien envoyé par /prof.
+        if request.url.scheme == "https" and "service" in holder:
+            base = f"https://{request.url.netloc}"
+            if holder["service"].db.get_kv("public_base_url") != base:
+                holder["service"].db.set_kv("public_base_url", base)
+        return await call_next(request)
+
+    def require_prof(
+        authorization: Annotated[str | None, Header()] = None,
+        svc: Service = Depends(get_service),
+    ) -> Service:
+        expected = f"Bearer {svc.prof_token()}"
+        if not authorization or not hmac.compare_digest(authorization.encode(), expected.encode()):
+            raise HTTPException(status_code=401, detail="Lien professeur invalide : demandez-en un avec /prof sur Telegram")
+        return svc
+
+    @app.get("/prof")
+    def prof_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "prof.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/prof")
+    async def prof_overview(svc: Service = Depends(require_prof)) -> dict:
+        return svc.prof_overview()
+
+    @app.put("/api/prof/reglages")
+    async def prof_settings(
+        niveau: Annotated[str, Body()], duree_min: Annotated[int, Body()], svc: Service = Depends(require_prof)
+    ) -> dict:
+        try:
+            svc.set_reglages(niveau, duree_min)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return svc.reglages()
+
+    @app.put("/api/prof/programme")
+    async def prof_programme(texte: Annotated[str, Body(embed=True)], svc: Service = Depends(require_prof)) -> dict:
+        svc.db.set_programme(texte.strip(), svc.now())
+        return {"ok": True}
+
+    @app.post("/api/prof/sujets")
+    async def prof_add_subject(texte: Annotated[str, Body(embed=True)], svc: Service = Depends(require_prof)) -> dict:
+        try:
+            return {"id": svc.add_suggestion(texte)}
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    @app.delete("/api/prof/sujets/{suggestion_id}")
+    async def prof_delete_subject(suggestion_id: int, svc: Service = Depends(require_prof)) -> dict:
+        svc.db.delete_suggestion(suggestion_id)
+        return {"ok": True}
+
+    @app.post("/api/prof/regenerer")
+    async def prof_regenerate(
+        consignes: Annotated[str, Body(embed=True)] = "", svc: Service = Depends(require_prof)
+    ) -> dict:
+        try:
+            await svc.ensure_today_assignment(consignes=consignes.strip() or None, force=True)
+        except (ValueError, LLMError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return svc.prof_overview()
+
+    @app.post("/api/prof/debloquer")
+    async def prof_unlock(svc: Service = Depends(require_prof)) -> dict:
+        return {"message": svc.manual_unlock()}
 
     @app.get("/eleve")
     def student_page() -> FileResponse:

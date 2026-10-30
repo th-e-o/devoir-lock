@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Devoir du jour – professeur</title>
+<link rel="stylesheet" href="/static/katex.min.css">
+<script src="/static/katex.min.js"></script>
+<script src="/static/marked.min.js"></script>
+<style>
+  :root { --fond: #fff; --texte: #1b1b1f; --doux: #666; --carte: #f3f4f7; --bord: #d9dbe1; --bleu: #1e5aa8;
+          --ok: #d7f5dd; --attente: #ffe9c7; --ko: #fde0e0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fond: #121316; --texte: #ececf1; --doux: #a0a0a8; --carte: #1f2026; --bord: #34363f;
+            --ok: #1f4d2a; --attente: #4d3a17; --ko: #522424; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 860px; background: var(--fond); color: var(--texte);
+         font: 16px/1.5 -apple-system, system-ui, sans-serif;
+         padding: max(12px, env(safe-area-inset-top)) 16px max(32px, env(safe-area-inset-bottom)); }
+  h1 { font-size: 1.4em; margin: 0 0 4px; }
+  h2 { font-size: 1.1em; margin: 0 0 8px; }
+  h3 { font-size: 1em; margin: 0.4em 0; }
+  section { background: var(--carte); border-radius: 12px; padding: 14px; margin: 14px 0; }
+  .sous-titre, .petit { color: var(--doux); font-size: 0.9em; }
+  .pastille { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 0.9em; background: var(--attente); }
+  .pastille.valide { background: var(--ok); }
+  .pastille.refuse { background: var(--ko); }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input[type=text], input[type=number], textarea { width: 100%; padding: 9px 10px; font: inherit; color: var(--texte);
+         background: var(--fond); border: 1px solid var(--bord); border-radius: 8px; }
+  textarea { min-height: 90px; resize: vertical; }
+  #programme { min-height: 260px; font-size: 0.95em; }
+  button { padding: 9px 14px; margin: 8px 8px 0 0; border: 0; border-radius: 8px; font: inherit; font-weight: 600;
+           background: var(--bleu); color: #fff; cursor: pointer; }
+  button.secondaire { background: var(--fond); color: var(--texte); border: 1px solid var(--bord); }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .katex-display { overflow-x: auto; overflow-y: hidden; }
+  .enonce { overflow-wrap: anywhere; }
+  details summary { cursor: pointer; font-weight: 600; margin-top: 10px; }
+  ul.sujets { list-style: none; padding: 0; margin: 0; }
+  ul.sujets li { display: flex; gap: 8px; align-items: center; justify-content: space-between;
+                 padding: 6px 0; border-bottom: 1px solid var(--bord); }
+  ul.sujets li button { margin: 0; padding: 4px 10px; }
+  .ligne { display: flex; gap: 10px; flex-wrap: wrap; }
+  .ligne > div { flex: 1 1 200px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92em; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--bord); vertical-align: top; }
+  .table-scroll { overflow-x: auto; }
+  #message { position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 600px; margin: 0 auto; padding: 10px 14px;
+             border-radius: 10px; background: var(--texte); color: var(--fond); display: none; }
+  .cache { display: none; }
+</style>
+</head>
+<body>
+<h1>Devoir du jour</h1>
+<div class="sous-titre">Interface professeur</div>
+
+<div id="erreur-acces" class="cache">
+  <section><p id="texte-erreur"></p><p>Envoyez <b>/prof</b> au bot Telegram pour recevoir un lien valide.</p></section>
+</div>
+
+<div id="contenu" class="cache">
+  <section>
+    <h2>Aujourd'hui <span id="date" class="petit"></span> <span id="statut" class="pastille"></span></h2>
+    <div id="devoir"></div>
+    <div id="copie"></div>
+    <label for="consignes">Régénérer le devoir du jour (consignes facultatives)</label>
+    <input id="consignes" type="text" placeholder="ex. plus court, sur les sommes télescopiques">
+    <button id="regenerer">Régénérer</button>
+    <button id="debloquer" class="secondaire">Débloquer aujourd'hui sans copie</button>
+  </section>
+
+  <section>
+    <h2>Niveau et durée</h2>
+    <div class="ligne">
+      <div>
+        <label for="niveau">Niveau de l'élève</label>
+        <input id="niveau" type="text">
+      </div>
+      <div style="flex: 0 1 180px">
+        <label for="duree">Durée visée (min)</label>
+        <input id="duree" type="number" min="10" max="120" step="5">
+      </div>
+    </div>
+    <div class="petit">Pris en compte à partir du prochain devoir généré.</div>
+    <button id="enregistrer-reglages">Enregistrer</button>
+  </section>
+
+  <section>
+    <h2>Sujets suggérés</h2>
+    <div class="petit">Chaque sujet sert pour un devoir, dans l'ordre. Sans sujet en attente, l'IA suit le programme.</div>
+    <ul id="sujets" class="sujets"></ul>
+    <label for="nouveau-sujet">Ajouter un sujet</label>
+    <input id="nouveau-sujet" type="text" placeholder="ex. récurrence forte, inégalité de Bernoulli">
+    <button id="ajouter-sujet">Ajouter</button>
+  </section>
+
+  <section>
+    <h2>Programme et progression</h2>
+    <div class="petit">Texte libre lu par l'IA avant chaque devoir : chapitres faits, chapitre en cours, points faibles, consignes de style.</div>
+    <textarea id="programme"></textarea>
+    <button id="enregistrer-programme">Enregistrer le programme</button>
+  </section>
+
+  <section>
+    <h2>Historique</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Date</th><th>Devoir</th><th>Statut</th><th>Note IA</th></tr></thead>
+        <tbody id="historique"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div id="message"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const STATUTS = {
+  en_preparation: "en préparation", a_faire: "à faire", en_correction: "copie à corriger", valide: "validé",
+};
+const COPIES = { en_attente: "en attente", valide: "validée", refuse: "refusée", remplacee: "remplacée" };
+
+function lireCode() {
+  const m = location.hash.match(/k=([^&]+)/);
+  if (m) {
+    const code = decodeURIComponent(m[1]);
+    try { localStorage.setItem("prof", code); } catch (e) {}
+    history.replaceState(null, "", location.pathname);  // le code ne reste pas dans la barre d'adresse
+    return code;
+  }
+  try { return localStorage.getItem("prof"); } catch (e) { return null; }
+}
+const code = lireCode();
+
+async function api(chemin, methode = "GET", corps) {
+  const options = { method: methode, headers: { Authorization: "Bearer " + code } };
+  if (corps !== undefined) {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(corps);
+  }
+  const r = await fetch(chemin, options);
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401) { accesRefuse(data.detail || "Lien professeur invalide."); throw new Error("accès refusé"); }
+  if (!r.ok) throw new Error(data.detail || "Erreur serveur (" + r.status + ")");
+  return data;
+}
+
+function accesRefuse(texte) {
+  $("texte-erreur").textContent = texte;
+  $("erreur-acces").classList.remove("cache");
+  $("contenu").classList.add("cache");
+}
+
+let minuteur;
+function message(texte) {
+  $("message").textContent = texte;
+  $("message").style.display = "block";
+  clearTimeout(minuteur);
+  minuteur = setTimeout(() => ($("message").style.display = "none"), 3500);
+}
+
+function texte(balise, contenu, classe) {
+  const el = document.createElement(balise);
+  el.textContent = contenu;
+  if (classe) el.className = classe;
+  return el;
+}
+
+// Formules extraites avant Markdown (sinon « _ » et « * » seraient pris pour de l'italique).
+function markdownMaths(src) {
+  const maths = [];
+  const sansMaths = src.replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g, (_, bloc, ligne) => {
+    maths.push({ tex: bloc !== undefined ? bloc : ligne, display: bloc !== undefined });
+    return "@@MATH" + (maths.length - 1) + "@@";
+  });
+  return marked.parse(sansMaths).replace(/@@MATH(\d+)@@/g, (_, i) =>
+    katex.renderToString(maths[+i].tex, { displayMode: maths[+i].display, throwOnError: false }));
+}
+
+function bloc(titre, html, ouvert) {
+  const d = document.createElement("details");
+  if (ouvert) d.open = true;
+  d.append(texte("summary", titre));
+  const div = document.createElement("div");
+  div.className = "enonce";
+  div.innerHTML = html;
+  d.append(div);
+  return d;
+}
+
+function afficher(etat) {
+  $("date").textContent = etat.date;
+  $("statut").textContent = STATUTS[etat.statut] || etat.statut;
+  $("statut").className = "pastille" + (etat.statut === "valide" ? " valide" : "");
+
+  const devoir = $("devoir");
+  devoir.innerHTML = "";
+  if (etat.devoir) {
+    devoir.append(texte("h3", etat.devoir.titre));
+    devoir.append(texte("div", "Notions : " + etat.devoir.notions.join(", ") + " · durée estimée " + etat.devoir.duree_min + " min", "petit"));
+    devoir.append(bloc("Énoncé", markdownMaths(etat.devoir.enonce), true));
+    devoir.append(bloc("Corrigé", markdownMaths(etat.devoir.corrige), false));
+  } else {
+    devoir.append(texte("p", "Le devoir du jour n'est pas encore généré.", "petit"));
+  }
+
+  const copie = $("copie");
+  copie.innerHTML = "";
+  const c = etat.derniere_copie;
+  if (c) {
+    let t = "Dernière copie : " + (COPIES[c.statut] || c.statut);
+    if (c.decide_par) t += " (par " + (c.decide_par === "llm" ? "l'IA" : "le professeur") + ")";
+    if (c.rapport_ia) t += " · note IA " + c.rapport_ia.note_sur_20 + "/20";
+    copie.append(texte("p", t));
+    if (c.rapport_ia) copie.append(texte("p", c.rapport_ia.resume_prof, "petit"));
+    if (c.retour) copie.append(texte("p", "Retour à l'élève : " + c.retour, "petit"));
+    if (c.statut === "en_attente") copie.append(texte("p", "La validation se fait depuis Telegram (boutons sous les photos).", "petit"));
+  }
+
+  $("niveau").value = etat.reglages.niveau;
+  $("duree").value = etat.reglages.duree_min;
+  if (document.activeElement !== $("programme")) $("programme").value = etat.programme;
+
+  const sujets = $("sujets");
+  sujets.innerHTML = "";
+  if (!etat.sujets.length) sujets.append(texte("li", "Aucun sujet en attente.", "petit"));
+  for (const s of etat.sujets) {
+    const li = document.createElement("li");
+    li.append(texte("span", s.texte));
+    const b = texte("button", "Retirer", "secondaire");
+    b.addEventListener("click", () => action(b, async () => {
+      await api("/api/prof/sujets/" + s.id, "DELETE");
+      message("Sujet retiré");
+    }));
+    li.append(b);
+    sujets.append(li);
+  }
+
+  const hist = $("historique");
+  hist.innerHTML = "";
+  for (const h of etat.historique) {
+    const tr = document.createElement("tr");
+    tr.append(texte("td", h.date));
+    const td = texte("td", h.titre);
+    td.append(texte("div", h.notions.join(", "), "petit"));
+    tr.append(td);
+    tr.append(texte("td", (STATUTS[h.statut] || h.statut) + (h.valide_par ? " (" + (h.valide_par === "llm" ? "IA" : "prof") + ")" : "")));
+    tr.append(texte("td", h.note === null ? "–" : h.note + "/20"));
+    hist.append(tr);
+  }
+}
+
+async function charger() {
+  afficher(await api("/api/prof"));
+  $("erreur-acces").classList.add("cache");
+  $("contenu").classList.remove("cache");
+}
+
+async function action(bouton, fn) {
+  bouton.disabled = true;
+  try {
+    await fn();
+    await charger();
+  } catch (e) {
+    if (e.message !== "accès refusé") message("⚠️ " + e.message);
+  } finally {
+    bouton.disabled = false;
+  }
+}
+
+$("enregistrer-reglages").addEventListener("click", (ev) => action(ev.target, async () => {
+  await api("/api/prof/reglages", "PUT", { niveau: $("niveau").value, duree_min: Number($("duree").value) });
+  message("Réglages enregistrés");
+}));
+
+$("ajouter-sujet").addEventListener("click", (ev) => action(ev.target, async () => {
+  await api("/api/prof/sujets", "POST", { texte: $("nouveau-sujet").value });
+  $("nouveau-sujet").value = "";
+  message("Sujet ajouté");
+}));
+$("nouveau-sujet").addEventListener("keydown", (ev) => { if (ev.key === "Enter") $("ajouter-sujet").click(); });
+
+$("enregistrer-programme").addEventListener("click", (ev) => action(ev.target, async () => {
+  await api("/api/prof/programme", "PUT", { texte: $("programme").value });
+  message("Programme enregistré");
+}));
+
+$("regenerer").addEventListener("click", (ev) => {
+  if (!confirm("Remplacer le devoir du jour ? Une copie déjà envoyée pour l'ancien énoncé sera ignorée.")) return;
+  ev.target.textContent = "Génération… (1 à 2 min)";
+  action(ev.target, async () => {
+    await api("/api/prof/regenerer", "POST", { consignes: $("consignes").value });
+    $("consignes").value = "";
+    message("Nouveau devoir généré");
+  }).finally(() => (ev.target.textContent = "Régénérer"));
+});
+
+$("debloquer").addEventListener("click", (ev) => {
+  if (!confirm("Débloquer le téléphone pour aujourd'hui sans copie ?")) return;
+  action(ev.target, async () => message((await api("/api/prof/debloquer", "POST")).message));
+});
+
+if (code) charger().catch((e) => { if (e.message !== "accès refusé") message("⚠️ " + e.message); });
+else accesRefuse("Aucun code d'accès.");
+</script>
+</body>
+</html>

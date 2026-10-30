@@ -5,8 +5,8 @@ pas fait et validé. Tout est gratuit côté Apple : il n'y a pas d'app à insta
 et l'app **Raccourcis** intégrée à l'iPhone.
 
 ```
- iPhone                                     Serveur maison (Python)                 Parent (Telegram)
- ──────                                     ───────────────────────                 ─────────────────
+ iPhone de l'élève                          Serveur (Python)                        Professeur (Telegram + web)
+ ─────────────────                          ────────────────                        ───────────────────────────
  page web : énoncé (LaTeX)        ◄──────── génère le devoir avec Claude ◄────────  pilote le programme
  photo du cahier                  ────────► reçoit la copie              ────────►  ✅ / ❌ sur la photo
                                             15 min sans réponse → Claude corrige
@@ -14,19 +14,24 @@ et l'app **Raccourcis** intégrée à l'iPhone.
  d'Instagram, YouTube… : si « bloque », retour à la page du devoir
 ```
 
-- **Devoir** : chaque jour, Claude génère un exercice de prépa (≈ 45 min, style concours,
-  questions progressives) à partir du *programme* et de l'historique (il revient sur les
-  notions ratées). Le corrigé n'est jamais montré à l'élève.
-- **Supervision** : le parent parle à l'IA depuis Telegram (« on attaque les séries entières
-  lundi, insiste sur le rayon de convergence ») ; l'IA réécrit le programme, peut consulter
-  l'historique et régénérer le devoir du jour.
+- **Devoir** : chaque jour, Claude génère un exercice de maths avec une durée suggérée
+  (30 min par défaut), en questions progressives. Il s'appuie sur le *programme*, le niveau,
+  les sujets suggérés par le professeur et l'historique (il revient sur les notions ratées).
+  Par défaut, la progression est celle du début de sup (MPSI / MP2I). Le corrigé n'est jamais
+  montré à l'élève.
+- **Interface professeur** (lien envoyé par `/prof` sur Telegram) : régler le niveau et la durée
+  visée, suggérer des sujets pour les prochains devoirs, modifier le programme, voir l'énoncé et le
+  corrigé du jour, régénérer le devoir, consulter l'historique et les notes.
+- **Dialogue avec l'IA** : le professeur peut aussi écrire à l'IA depuis Telegram (« on passe aux
+  nombres complexes lundi, insiste sur les racines n-ièmes ») ; l'IA réécrit le programme, règle le
+  niveau, ajoute des sujets, consulte l'historique et régénère le devoir du jour.
 - **Validation** : la copie arrive sur Telegram avec le corrigé de référence et deux boutons.
-  Sans réponse au bout de 15 min, Claude lit les photos et décide (note, retour à l'élève). Le parent
+  Sans réponse au bout de 15 min, Claude lit les photos et décide (note, retour à l'élève). Le professeur
   peut toujours renverser la décision ensuite, et un refus peut être accompagné d'un message.
 - **Blocage** : une automatisation de l'app Raccourcis se déclenche à l'ouverture des apps choisies
   et interroge le serveur. Tant que le devoir n'est pas validé, elle renvoie aussitôt vers la page du
   devoir. Une fois le devoir validé, plus rien ne se passe jusqu'à minuit. **Aucune action
-  quotidienne n'est nécessaire** : le code Temps d'écran du parent se règle une seule fois et sert
+  quotidienne n'est nécessaire** : le code Temps d'écran du professeur se règle une seule fois et sert
   uniquement à empêcher de toucher à la configuration.
 
 ## 1. Bot Telegram
@@ -48,23 +53,25 @@ set -a; . ./.env; set +a
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-- Envoyez `/start` au bot : il répond avec l'identifiant du chat. Mettez-le dans `PARENT_CHAT_IDS`
-  (plusieurs parents : séparés par des virgules), puis redémarrez.
+- Envoyez `/start` au bot : il répond avec l'identifiant du chat. Mettez-le dans `PROF_CHAT_IDS`
+  (plusieurs professeurs : séparés par des virgules), puis redémarrez. L'ancien nom `PARENT_CHAT_IDS`
+  est encore accepté.
 - Service permanent : `deploy/devoir.service` (systemd).
 - **Le serveur doit être joignable en HTTPS depuis Internet**, pas seulement depuis le wifi de la maison.
   Sinon, l'élève n'aurait qu'à couper le wifi pour que le Raccourci échoue. C'est le cas d'un VPS avec
   votre nom de domaine. Tout est protégé par le code d'accès `DEVICE_TOKEN` : prenez une valeur longue et aléatoire.
 - Tests : `.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`
 
-Les deux premiers jours, utilisez `/programme` et la conversation avec l'IA pour décrire la progression
-(chapitres faits, chapitre en cours, points faibles). Sinon, l'IA suit la progression habituelle de MPSI.
+Au départ, le programme est une progression de début de sup (logique, sommes, complexes, fonctions
+usuelles…). Adaptez-le dans l'interface professeur (`/prof`) ou en écrivant à l'IA : chapitres faits,
+chapitre en cours, points faibles.
 
 ## 3. Page de l'élève
 
 Sur l'iPhone, ouvrez dans Safari `https://devoir.deltastat.fr/eleve#k=CODE`, où `CODE` est la valeur de
 `DEVICE_TOKEN`. Puis touchez Partager > **Sur l'écran d'accueil** : la page s'ouvre ensuite comme une app.
 
-La page affiche l'énoncé et la réponse du parent ou de l'IA. Le bouton photo ouvre directement l'appareil
+La page affiche l'énoncé, la durée suggérée et la réponse du professeur ou de l'IA. Le bouton photo ouvre directement l'appareil
 photo, sans accès à la photothèque, et les photos sont réduites avant l'envoi.
 
 ## 4. Le Raccourci qui bloque
@@ -89,7 +96,7 @@ Onglet *Automatisation* > **Nouvelle automatisation** > **App** :
 Vérifiez : ouvrez Instagram, vous devez être renvoyé sur la page du devoir. Ensuite, `/debloquer` sur
 Telegram, puis rouvrez Instagram : il doit s'ouvrir normalement.
 
-### 4c. Verrouiller la configuration (parent, une seule fois)
+### 4c. Verrouiller la configuration (professeur, une seule fois)
 Sur l'iPhone de l'élève, dans **Réglages > Temps d'écran** :
 1. **Verrouiller les réglages de Temps d'écran** : choisissez un code que vous seul connaissez.
    Vous ne le changerez jamais et il n'est pas demandé au quotidien.
@@ -112,7 +119,9 @@ Sur l'iPhone de l'élève, dans **Réglages > Temps d'écran** :
 | `/devoir`, `/corrige` | énoncé, corrigé |
 | `/debloquer` | débloque pour la journée (malade, vacances…) |
 | `/regenerer [consignes]` | remplace le devoir du jour (`/regenerer plus court, sur les intégrales`) |
-| `/programme` | affiche le programme |
+| `/prof` | lien vers l'interface professeur (`/prof nouveau` change le lien) |
+| `/sujet <texte>` | suggère un sujet pour un prochain devoir (`/sujet` seul : la liste) |
+| `/programme` | affiche le niveau, la durée visée et le programme |
 | `/nouvelle` | repart d'une conversation vierge avec l'IA |
 | texte libre | conversation avec l'IA qui gère le programme |
 

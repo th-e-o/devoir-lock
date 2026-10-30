@@ -1,7 +1,8 @@
-"""Logique métier : devoir du jour, soumissions, validation parent / LLM, bot superviseur."""
+"""Logique métier : devoir du jour, soumissions, validation professeur / LLM, bot du professeur."""
 
 import asyncio
 import io
+import secrets
 import json
 import logging
 from collections.abc import Callable
@@ -24,8 +25,34 @@ CHAT_MAX_MESSAGES = 80  # au-delà, la conversation avec l'IA repart de zéro
 GENERATION_RETRY = timedelta(minutes=10)
 GRADING_RETRY = timedelta(minutes=5)
 
+DEFAULT_NIVEAU = "début de première année de classe préparatoire scientifique (MPSI / MP2I)"
+DEFAULT_DUREE_MIN = 30
+
+DEFAULT_PROGRAMME = """\
+Élève en début de première année de classe préparatoire (MPSI / MP2I). Exercices de niveau \
+début de sup : questions guidées, calculs à mener proprement et à justifier, une seule question \
+demandant une petite initiative.
+
+Progression des premières semaines, dans l'ordre (environ un chapitre toutes les une à deux \
+semaines, en revenant régulièrement sur les chapitres précédents) :
+1. Logique et raisonnements : quantificateurs, implication, contraposée, absurde, récurrence, \
+analyse-synthèse.
+2. Calculs algébriques : sommes et produits, changements d'indice, sommes télescopiques, \
+coefficients binomiaux, formule du binôme.
+3. Inégalités, valeur absolue, partie entière.
+4. Nombres complexes : forme algébrique et trigonométrique, racines n-ièmes, interprétation \
+géométrique.
+5. Fonctions usuelles : exponentielle, logarithme, puissances, fonctions trigonométriques et \
+réciproques, fonctions hyperboliques.
+6. Dérivation et étude de fonctions, primitives et intégrales simples, équations différentielles \
+linéaires d'ordre 1 et d'ordre 2 à coefficients constants.
+7. Ensembles et applications : injections, surjections, bijections.
+8. Suites réelles : limites, suites monotones et adjacentes, suites récurrentes u(n+1) = f(u(n)).
+"""
+
 HELP = """\
 Commandes :
+/prof - lien vers l'interface professeur (niveau, durée, sujets, programme)
 /statut - état du devoir du jour
 /devoir - énoncé du jour
 /corrige - corrigé du jour
@@ -33,19 +60,25 @@ Commandes :
 /regenerer [consignes] - nouveau devoir du jour
 /programme - programme actuel
 /nouvelle - repartir d'une conversation vierge avec l'IA
-Tout autre message est envoyé à l'IA qui gère le programme (ex. « on attaque les séries \
-entières lundi, insiste sur les rayons de convergence »)."""
+/sujet <texte> - suggérer un sujet pour un prochain devoir
+Tout autre message est envoyé à l'IA qui gère le programme (ex. « on passe aux nombres \
+complexes lundi, insiste sur les racines n-ièmes »)."""
 
 
 class Tutor(Protocol):
     async def generate_assignment(
-        self, programme: str, history: list[dict[str, Any]], consignes: str | None = None
+        self,
+        programme: str,
+        history: list[dict[str, Any]],
+        reglages: dict[str, Any],
+        consignes: str | None = None,
+        sujet: str | None = None,
     ) -> dict[str, Any]: ...
 
-    async def grade(self, assignment: dict[str, Any], photos: list[bytes]) -> dict[str, Any]: ...
+    async def grade(self, assignment: dict[str, Any], photos: list[bytes], reglages: dict[str, Any]) -> dict[str, Any]: ...
 
     async def supervisor_turn(
-        self, history: list[dict[str, Any]], user_text: str, run_tool: Any
+        self, history: list[dict[str, Any]], user_text: str, run_tool: Any, reglages: dict[str, Any]
     ) -> tuple[list[dict[str, Any]], str]: ...
 
 
@@ -92,6 +125,8 @@ class Service:
         self._tasks: set[asyncio.Task] = set()
         self._last_generation_attempt: dict[str, datetime] = {}
         self._grading_failed_at: dict[int, datetime] = {}
+        if not self.db.get_programme():
+            self.db.set_programme(DEFAULT_PROGRAMME, self.now())
 
     # --- utilitaires ----------------------------------------------------------
 
@@ -112,14 +147,88 @@ class Service:
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
-    async def notify_parents(self, text: str, keyboard: list[list[dict[str, str]]] | None = None) -> list[tuple[int, int]]:
+    async def notify_profs(self, text: str, keyboard: list[list[dict[str, str]]] | None = None) -> list[tuple[int, int]]:
         sent = []
-        for chat_id in self.s.parent_chat_ids:
+        for chat_id in self.s.prof_chat_ids:
             try:
                 sent.append((chat_id, await self.bot.send_message(chat_id, text, keyboard=keyboard)))
             except Exception:
                 log.exception("Envoi Telegram impossible vers %s", chat_id)
         return sent
+
+    # --- réglages du professeur ----------------------------------------------
+
+    def reglages(self) -> dict[str, Any]:
+        return {
+            "niveau": self.db.get_kv("niveau") or DEFAULT_NIVEAU,
+            "duree_min": int(self.db.get_kv("duree_min") or DEFAULT_DUREE_MIN),
+        }
+
+    def set_reglages(self, niveau: str, duree_min: int) -> None:
+        niveau = niveau.strip()
+        if not niveau:
+            raise ValueError("Le niveau ne peut pas être vide.")
+        if not 10 <= int(duree_min) <= 120:
+            raise ValueError("La durée doit être comprise entre 10 et 120 minutes.")
+        self.db.set_kv("niveau", niveau)
+        self.db.set_kv("duree_min", str(int(duree_min)))
+
+    def add_suggestion(self, texte: str) -> int:
+        texte = texte.strip()
+        if not texte:
+            raise ValueError("Sujet vide.")
+        return self.db.add_suggestion(texte, self.now())
+
+    def prof_token(self, rotate: bool = False) -> str:
+        """Code d'accès de l'interface professeur, créé au premier besoin (lien envoyé par /prof)."""
+        token = self.db.get_kv("prof_token")
+        if rotate or not token:
+            token = secrets.token_urlsafe(24)
+            self.db.set_kv("prof_token", token)
+        return token
+
+    def prof_link(self) -> str:
+        base = self.db.get_kv("public_base_url") or "https://VOTRE-SERVEUR"
+        return f"{base}/prof#k={self.prof_token()}"
+
+    def prof_overview(self) -> dict[str, Any]:
+        """Tout ce qu'affiche l'interface professeur."""
+        state = self.device_state()
+        today = self.db.get_assignment(self.today())
+        latest = self.db.latest_submission(today["id"]) if today else None
+        history = []
+        for h in self.db.recent_history(20):
+            report = json.loads(h["llm_report"]) if h.get("llm_report") else None
+            history.append({
+                "date": h["date"],
+                "titre": h["titre"],
+                "notions": json.loads(h["notions"]),
+                "statut": h["status"],
+                "valide_par": h["validated_by"],
+                "nb_copies": h["nb_soumissions"],
+                "note": report.get("note_sur_20") if report else None,
+            })
+        return {
+            "date": state["date"],
+            "statut": state["status"],
+            "devoir": {
+                "titre": today["titre"],
+                "notions": json.loads(today["notions"]),
+                "enonce": today["enonce"],
+                "corrige": today["corrige"],
+                "duree_min": today["duree_min"],
+            } if today else None,
+            "derniere_copie": {
+                "statut": latest["status"],
+                "decide_par": latest["decided_by"],
+                "retour": latest["feedback"],
+                "rapport_ia": json.loads(latest["llm_report"]) if latest["llm_report"] else None,
+            } if latest else None,
+            "reglages": self.reglages(),
+            "programme": self.db.get_programme(),
+            "sujets": self.db.pending_suggestions(),
+            "historique": history,
+        }
 
     # --- devoir du jour -------------------------------------------------------
 
@@ -133,7 +242,16 @@ class Service:
                 raise ValueError("Le devoir du jour est déjà validé.")
             self._last_generation_attempt[date] = self.now()
             history = [self._history_entry(h) for h in self.db.recent_history(15)]
-            data = await self.tutor.generate_assignment(self.db.get_programme(), history, consignes)
+            suggestion = self.db.suggestion_for(date)
+            data = await self.tutor.generate_assignment(
+                self.db.get_programme(),
+                history,
+                self.reglages(),
+                consignes=consignes,
+                sujet=suggestion["texte"] if suggestion else None,
+            )
+            if suggestion:
+                self.db.mark_suggestion_used(suggestion["id"], date)
             if existing:
                 # Les copies envoyées pour l'ancien énoncé n'ont plus d'objet.
                 self.db.execute(
@@ -142,7 +260,7 @@ class Service:
                 )
             self.db.upsert_assignment(date, data, self.now())
         assignment = self.db.get_assignment(date)
-        await self.notify_parents(
+        await self.notify_profs(
             f"📘 Devoir du {date} : {assignment['titre']}\n"
             f"Notions : {', '.join(json.loads(assignment['notions']))} · ~{assignment['duree_min']} min\n\n"
             f"{assignment['enonce']}"
@@ -177,7 +295,7 @@ class Service:
             await self.ensure_today_assignment()
         except Exception as e:
             log.exception("Génération du devoir impossible")
-            await self.notify_parents(
+            await self.notify_profs(
                 f"⚠️ Je n'arrive pas à générer le devoir du jour ({e}). Nouvel essai dans 10 min. "
                 "Vous pouvez aussi débloquer le téléphone avec /debloquer."
             )
@@ -245,8 +363,8 @@ class Service:
             paths.append(str(path))
         self.db.execute("UPDATE submissions SET photos = ? WHERE id = ?", (json.dumps(paths), submission_id))
 
-        deadline = (now + timedelta(minutes=self.s.parent_timeout_minutes)).strftime("%H:%M")
-        for chat_id in self.s.parent_chat_ids:
+        deadline = (now + timedelta(minutes=self.s.prof_timeout_minutes)).strftime("%H:%M")
+        for chat_id in self.s.prof_chat_ids:
             try:
                 await self.bot.send_photos(chat_id, photos, caption=f"Copie : {assignment['titre']}")
                 await self.bot.send_message(chat_id, f"Corrigé de référence :\n\n{assignment['corrige']}")
@@ -283,8 +401,8 @@ class Service:
             return "Cette copie a été remplacée par une plus récente."
         assignment = self.db.one("SELECT * FROM assignments WHERE id = ?", (sub["assignment_id"],))
         if by == "llm" and sub["status"] != "en_attente":
-            return "Déjà décidé par le parent."
-        if by == "parent" and sub["decided_by"] == "parent" and sub["status"] == ("valide" if accepted else "refuse"):
+            return "Déjà décidé par le professeur."
+        if by == "prof" and sub["decided_by"] == "prof" and sub["status"] == ("valide" if accepted else "refuse"):
             return "C'était déjà votre décision."
 
         now = self.now().isoformat()
@@ -316,14 +434,14 @@ class Service:
         assignment = self.db.one("SELECT * FROM assignments WHERE id = ?", (sub["assignment_id"],))
         photos = [Path(p).read_bytes() for p in json.loads(sub["photos"])]
         try:
-            report = await self.tutor.grade(assignment, photos)
+            report = await self.tutor.grade(assignment, photos, self.reglages())
         except Exception as e:
             log.exception("Correction automatique impossible")
             first_failure = submission_id not in self._grading_failed_at
             self._grading_failed_at[submission_id] = self.now()
             self.db.execute("UPDATE submissions SET llm_started = 0 WHERE id = ?", (submission_id,))
             if first_failure:
-                await self.notify_parents(
+                await self.notify_profs(
                     f"⚠️ Correction automatique impossible ({e}). Nouvel essai toutes les 5 min ; "
                     "vous pouvez aussi valider ou refuser vous-même."
                 )
@@ -331,17 +449,17 @@ class Service:
         self._grading_failed_at.pop(submission_id, None)
         accepted = report["verdict"] == "valide"
         outcome = self.decide(submission_id, accepted, "llm", feedback=report["retour_eleve"], report=report)
-        if outcome == "Déjà décidé par le parent.":
-            # Le parent a répondu pendant la correction : on garde le rapport pour l'historique.
+        if outcome == "Déjà décidé par le professeur.":
+            # Le professeur a répondu pendant la correction : on garde le rapport pour l'historique.
             self.db.execute(
                 "UPDATE submissions SET llm_report = ? WHERE id = ?",
                 (json.dumps(report, ensure_ascii=False), submission_id),
             )
             return
         icon = "✅" if accepted else "❌"
-        await self.notify_parents(
+        await self.notify_profs(
             f"{icon} L'IA a corrigé la copie : {report['verdict']} ({report['note_sur_20']}/20).\n"
-            f"{report['resume_parent']}\n\n"
+            f"{report['resume_prof']}\n\n"
             f"Retour donné à l'élève : {report['retour_eleve']}\n\n"
             "Vous pouvez encore changer la décision :",
             keyboard=self._decision_keyboard(submission_id),
@@ -353,7 +471,7 @@ class Service:
         now = self.now()
         if now.hour >= self.s.generation_hour:
             self._schedule_generation_if_needed()
-        limit = (now - timedelta(minutes=self.s.parent_timeout_minutes)).isoformat()
+        limit = (now - timedelta(minutes=self.s.prof_timeout_minutes)).isoformat()
         overdue = self.db.all(
             "SELECT id FROM submissions WHERE status = 'en_attente' AND llm_started = 0 AND created_at <= ?",
             (limit,),
@@ -375,7 +493,7 @@ class Service:
 
     async def _handle_callback(self, cq: dict[str, Any]) -> None:
         chat_id = cq["message"]["chat"]["id"]
-        if chat_id not in self.s.parent_chat_ids:
+        if chat_id not in self.s.prof_chat_ids:
             await self.bot.answer_callback(cq["id"], "Non autorisé")
             return
         action, _, raw_id = cq.get("data", "").partition(":")
@@ -383,7 +501,7 @@ class Service:
             await self.bot.answer_callback(cq["id"])
             return
         submission_id = int(raw_id)
-        outcome = self.decide(submission_id, action == "ok", "parent")
+        outcome = self.decide(submission_id, action == "ok", "prof")
         await self.bot.answer_callback(cq["id"], outcome[:190])
         await self.bot.remove_keyboard(chat_id, cq["message"]["message_id"])
         if action == "ko" and outcome.startswith(("Copie refusée", "Validation annulée")):
@@ -395,8 +513,8 @@ class Service:
             self.db.set_kv(f"feedback_prompt:{chat_id}:{prompt_id}", str(submission_id))
         else:
             await self.bot.send_message(chat_id, outcome)
-        others = f"Décision d'un autre parent : {outcome}"
-        for other in self.s.parent_chat_ids - {chat_id}:
+        others = f"Décision d'un autre professeur : {outcome}"
+        for other in self.s.prof_chat_ids - {chat_id}:
             await self.bot.send_message(other, others)
 
     async def _handle_message(self, msg: dict[str, Any]) -> None:
@@ -406,10 +524,10 @@ class Service:
             await self.bot.send_message(
                 chat_id,
                 f"Identifiant de ce chat : {chat_id}\n"
-                "Ajoutez-le à PARENT_CHAT_IDS dans la configuration du serveur.\n\n" + HELP,
+                "Ajoutez-le à PROF_CHAT_IDS dans la configuration du serveur.\n\n" + HELP,
             )
             return
-        if chat_id not in self.s.parent_chat_ids or not text:
+        if chat_id not in self.s.prof_chat_ids or not text:
             return
 
         reply_to = msg.get("reply_to_message")
@@ -435,12 +553,35 @@ class Service:
                 a = self.db.get_assignment(self.today())
                 await self.bot.send_message(chat_id, a["corrige"] if a else "Pas encore de devoir.")
             elif command == "/debloquer":
-                await self.bot.send_message(chat_id, self._manual_unlock())
+                await self.bot.send_message(chat_id, self.manual_unlock())
             elif command == "/regenerer":
                 await self.bot.send_message(chat_id, "Génération en cours…")
                 await self.ensure_today_assignment(consignes=arg.strip() or None, force=True)
             elif command == "/programme":
-                await self.bot.send_message(chat_id, self.db.get_programme() or "(programme vide)")
+                r = self.reglages()
+                await self.bot.send_message(
+                    chat_id,
+                    f"Niveau : {r['niveau']}\nDurée visée : {r['duree_min']} min\n\n{self.db.get_programme()}",
+                )
+            elif command == "/prof":
+                if arg.strip() == "nouveau":
+                    self.prof_token(rotate=True)
+                await self.bot.send_message(
+                    chat_id,
+                    f"Interface professeur :\n{self.prof_link()}\n\n"
+                    "Ce lien donne accès à l'interface : ne le partagez pas. "
+                    "« /prof nouveau » le remplace (l'ancien ne marche plus).",
+                )
+            elif command == "/sujet":
+                if not arg.strip():
+                    pending = self.db.pending_suggestions()
+                    listing = "\n".join(f"- {x['texte']}" for x in pending) or "(aucun)"
+                    await self.bot.send_message(chat_id, f"Sujets en attente :\n{listing}\n\nAjouter : /sujet <texte>")
+                else:
+                    self.add_suggestion(arg)
+                    await self.bot.send_message(
+                        chat_id, f"Sujet ajouté ({len(self.db.pending_suggestions())} en attente)."
+                    )
             elif command == "/nouvelle":
                 self.db.clear_chat()
                 await self.bot.send_message(chat_id, "Nouvelle conversation.")
@@ -466,7 +607,7 @@ class Service:
             text += f"\nDernière copie : {state['derniere_copie']['status']}"
         return text
 
-    def _manual_unlock(self) -> str:
+    def manual_unlock(self) -> str:
         assignment = self.db.get_assignment(self.today())
         now = self.now().isoformat()
         if not assignment:
@@ -479,7 +620,7 @@ class Service:
             )
             assignment = self.db.get_assignment(self.today())
         self.db.execute(
-            "UPDATE assignments SET status = 'valide', validated_by = 'parent', validated_at = ? WHERE id = ?",
+            "UPDATE assignments SET status = 'valide', validated_by = 'prof', validated_at = ? WHERE id = ?",
             (now, assignment["id"]),
         )
         self.db.execute(
@@ -488,7 +629,7 @@ class Service:
         )
         return "Téléphone débloqué pour aujourd'hui."
 
-    # --- conversation avec l'IA (superviseur) ---------------------------------
+    # --- conversation avec l'IA (professeur) ----------------------------------
 
     async def supervisor_chat(self, text: str) -> str:
         async with self._chat_lock:
@@ -498,7 +639,7 @@ class Service:
                 self.db.clear_chat()
                 history = []
                 note = "(Conversation trop longue : je repars de zéro. Le programme et l'historique sont conservés.)\n\n"
-            new_messages, answer = await self.tutor.supervisor_turn(history, text, self._run_tool)
+            new_messages, answer = await self.tutor.supervisor_turn(history, text, self._run_tool, self.reglages())
             now = self.now()
             for m in new_messages:
                 self.db.append_chat(m["role"], m["content"], now)
@@ -506,7 +647,20 @@ class Service:
 
     async def _run_tool(self, name: str, args: dict[str, Any]) -> str:
         if name == "lire_programme":
-            return self.db.get_programme() or "(programme vide)"
+            return json.dumps(
+                {
+                    "programme": self.db.get_programme(),
+                    "reglages": self.reglages(),
+                    "sujets_en_attente": [x["texte"] for x in self.db.pending_suggestions()],
+                },
+                ensure_ascii=False,
+            )
+        if name == "regler_niveau":
+            self.set_reglages(args["niveau"], args["duree_min"])
+            return f"Réglages enregistrés : {self.reglages()}"
+        if name == "ajouter_sujet":
+            self.add_suggestion(args["sujet"])
+            return f"Sujet ajouté ({len(self.db.pending_suggestions())} en attente)."
         if name == "modifier_programme":
             self.db.set_programme(args["texte"], self.now())
             return "Programme mis à jour."

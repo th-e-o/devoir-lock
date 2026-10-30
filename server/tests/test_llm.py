@@ -48,8 +48,10 @@ class FakeAPI:
         client = anthropic.AsyncAnthropic(
             api_key="test", http_client=anthropic.DefaultAsyncHttpxClient(transport=httpx2.MockTransport(self.handler))
         )
-        return ClaudeTutor("claude-opus-5-5", "MPSI", 45, client=client)
+        return ClaudeTutor("claude-opus-5-5", client=client)
 
+
+REGLAGES = {"niveau": "début de MPSI", "duree_min": 30}
 
 ASSIGNMENT = {"titre": "T", "notions": ["n"], "enonce": "E", "corrige": "C",
               "criteres_validation": ["c"], "duree_estimee_min": 40}
@@ -57,7 +59,7 @@ ASSIGNMENT = {"titre": "T", "notions": ["n"], "enonce": "E", "corrige": "C",
 
 async def test_generate_assignment_request():
     api = FakeAPI([sse([{"type": "text", "text": json.dumps(ASSIGNMENT)}])])
-    result = await api.tutor().generate_assignment("Chapitre : suites", [], consignes="court")
+    result = await api.tutor().generate_assignment("Chapitre : suites", [], REGLAGES, consignes="court", sujet="binôme")
     assert result == ASSIGNMENT
     body = api.requests[0]
     assert body["model"] == "claude-opus-5-5"
@@ -66,12 +68,14 @@ async def test_generate_assignment_request():
     assert "server-side-fallback-2026-07-01" in api.headers[0]["anthropic-beta"]
     assert "Chapitre : suites" in body["system"]
     assert "court" in body["messages"][0]["content"]
+    assert "binôme" in body["messages"][0]["content"]
+    assert "30 minutes" in body["system"] and "début de MPSI" in body["system"]
 
 
 async def test_grade_sends_images():
-    report = {"verdict": "valide", "note_sur_20": 14, "resume_parent": "r", "retour_eleve": "b", "points_a_revoir": []}
+    report = {"verdict": "valide", "note_sur_20": 14, "resume_prof": "r", "retour_eleve": "b", "points_a_revoir": []}
     api = FakeAPI([sse([{"type": "text", "text": json.dumps(report)}])])
-    result = await api.tutor().grade({"enonce": "E", "corrige": "C", "criteres": "[]"}, [b"\xff\xd8a", b"\xff\xd8b"])
+    result = await api.tutor().grade({"enonce": "E", "corrige": "C", "criteres": "[]"}, [b"\xff\xd8a", b"\xff\xd8b"], REGLAGES)
     assert result == report
     images = [c for c in api.requests[0]["messages"][0]["content"] if c["type"] == "image"]
     assert len(images) == 2 and images[0]["source"]["media_type"] == "image/jpeg"
@@ -90,7 +94,7 @@ async def test_supervisor_tool_loop():
         calls.append((name, args))
         return "Programme mis à jour."
 
-    new_messages, answer = await api.tutor().supervisor_turn([], "Passe aux séries", run_tool)
+    new_messages, answer = await api.tutor().supervisor_turn([], "Passe aux séries", run_tool, REGLAGES)
     assert calls == [("modifier_programme", {"texte": "Séries"})]
     assert answer == "C'est fait."
     assert [m["role"] for m in new_messages] == ["user", "assistant", "user", "assistant"]
@@ -103,4 +107,4 @@ async def test_supervisor_tool_loop():
 async def test_refusal_raises():
     api = FakeAPI([sse([], stop_reason="refusal")])
     with pytest.raises(LLMError):
-        await api.tutor().generate_assignment("", [])
+        await api.tutor().generate_assignment("", [], REGLAGES)

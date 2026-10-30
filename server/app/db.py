@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS assignments (
     criteres TEXT NOT NULL,         -- JSON list
     duree_min INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'a_faire',   -- a_faire | valide
-    validated_by TEXT,              -- parent | llm
+    validated_by TEXT,              -- prof | llm
     validated_at TEXT,
     created_at TEXT NOT NULL
 );
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     assignment_id INTEGER NOT NULL REFERENCES assignments(id),
     photos TEXT NOT NULL,           -- JSON list de chemins
     status TEXT NOT NULL DEFAULT 'en_attente',  -- en_attente | valide | refuse | remplacee
-    decided_by TEXT,                -- parent | llm
+    decided_by TEXT,                -- prof | llm
     decided_at TEXT,
     feedback TEXT,                  -- message affiché à l'élève
     llm_started INTEGER NOT NULL DEFAULT 0,
@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     role TEXT NOT NULL,
     content TEXT NOT NULL,          -- JSON (liste de blocs)
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS suggestions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    texte TEXT NOT NULL,
+    used_on TEXT,                   -- date du devoir qui l'a utilisée
     created_at TEXT NOT NULL
 );
 
@@ -158,7 +165,29 @@ class Database:
             (assignment_id,),
         )
 
-    # --- conversation superviseur -------------------------------------------
+    # --- sujets suggérés par le professeur ------------------------------------
+
+    def pending_suggestions(self) -> list[dict[str, Any]]:
+        return self.all("SELECT id, texte, created_at FROM suggestions WHERE used_on IS NULL ORDER BY id")
+
+    def add_suggestion(self, texte: str, now: datetime) -> int:
+        return self.execute(
+            "INSERT INTO suggestions(texte, created_at) VALUES(?, ?)", (texte, now.isoformat())
+        ).lastrowid
+
+    def delete_suggestion(self, suggestion_id: int) -> None:
+        self.execute("DELETE FROM suggestions WHERE id = ? AND used_on IS NULL", (suggestion_id,))
+
+    def suggestion_for(self, date: str) -> dict[str, Any] | None:
+        """Sujet déjà attribué à ce jour (régénération), sinon le plus ancien en attente."""
+        return self.one("SELECT * FROM suggestions WHERE used_on = ? ORDER BY id LIMIT 1", (date,)) or self.one(
+            "SELECT * FROM suggestions WHERE used_on IS NULL ORDER BY id LIMIT 1"
+        )
+
+    def mark_suggestion_used(self, suggestion_id: int, date: str) -> None:
+        self.execute("UPDATE suggestions SET used_on = ? WHERE id = ?", (date, suggestion_id))
+
+    # --- conversation avec le professeur --------------------------------------
 
     def chat_history(self) -> list[dict[str, Any]]:
         return [
