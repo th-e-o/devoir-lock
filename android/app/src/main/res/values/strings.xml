@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Devoir du jour</string>
-    <string name="take_photo">📷 Photographier une page</string>
-    <string name="send">Envoyer</string>
-    <string name="clear">Effacer</string>
-    <string name="call">📞 Téléphone</string>
-    <string name="continue_to_phone">Continuer vers le téléphone</string>
-</resources>

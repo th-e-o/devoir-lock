@@ -1,14 +1,14 @@
 # Devoir du jour
 
-Le téléphone de l'élève reste bloqué tant que le devoir de maths du jour n'est pas fait et validé.
+Le téléphone de l'élève (iPhone) reste bloqué tant que le devoir de maths du jour n'est pas fait et validé.
 
 ```
- Téléphone (Android, mode kiosque)          Serveur maison (Python)                 Parent (Telegram)
- ─────────────────────────────────          ───────────────────────                 ─────────────────
+ iPhone (Screen Time)                       Serveur maison (Python)                 Parent (Telegram)
+ ────────────────────                       ───────────────────────                 ─────────────────
  affiche l'énoncé (LaTeX)        ◄──────── génère le devoir avec Claude ◄────────  pilote le programme
  photographie le cahier          ────────► reçoit la copie              ────────►  ✅ / ❌ sur la photo
                                            15 min sans réponse → Claude corrige
- se débloque avec un jeton signé ◄──────── jeton ECDSA valable pour la journée
+ lève le bouclier (jeton signé)  ◄──────── jeton ECDSA valable pour la journée
 ```
 
 - **Devoir** : chaque jour, Claude génère un exercice de prépa (≈ 45 min, style concours,
@@ -20,9 +20,26 @@ Le téléphone de l'élève reste bloqué tant que le devoir de maths du jour n'
 - **Validation** : la copie arrive sur Telegram avec le corrigé de référence et deux boutons.
   Sans réponse au bout de 15 min, Claude lit les photos et décide (note, retour à l'élève). Le parent
   peut toujours renverser la décision ensuite, et un refus peut être accompagné d'un message.
-- **Blocage** : l'app est « propriétaire de l'appareil » (Device Owner). Tant que le devoir n'est pas
-  validé, seuls l'app, le téléphone, l'appareil photo et les apps que vous autorisez s'ouvrent.
-  Les appels d'urgence restent toujours possibles. Tout se rebloque à minuit.
+- **Blocage** : via l'API Screen Time d'Apple (FamilyControls / ManagedSettings). Toutes les apps
+  affichent un écran « Devoir du jour à faire », sauf celles que le parent autorise. Les appels
+  d'urgence restent toujours possibles. Une extension système remet le blocage à minuit,
+  même si l'app est fermée.
+
+## ⚠️ Avant de commencer : trois conditions côté Apple
+
+1. **Un Mac avec Xcode**, indispensable pour compiler une app iPhone.
+2. **Un compte Apple Developer** (99 €/an). L'API Screen Time (*Family Controls*) n'est
+   probablement pas accessible avec un compte gratuit. Pour un usage familial, une installation
+   directe depuis Xcode suffit. Une distribution par TestFlight ou l'App Store exige en plus
+   de demander à Apple l'autorisation « Family Controls (Distribution) ».
+3. **Le compte Apple de l'élève doit être un compte *enfant* de votre Partage familial**
+   (mode `child`, recommandé). Dans ce mode, l'élève ne peut ni retirer l'autorisation ni
+   supprimer l'app sans l'accord du parent. **Un élève de 18 ans ou plus ne peut plus être un
+   compte enfant.** Il reste alors le mode `individual`, où l'élève donne lui-même
+   l'autorisation et peut la retirer dans Réglages > Temps d'écran : le blocage devient un
+   engagement moral plus qu'une contrainte. Un code « Temps d'écran » défini par le parent sur
+   l'iPhone peut compliquer ce contournement, mais je ne peux pas garantir qu'il protège ce
+   réglage. À tester.
 
 ## 1. Bot Telegram
 
@@ -46,7 +63,7 @@ set -a; . ./.env; set +a
   La clé privée est créée dans `data/signing_key.pem` : sauvegardez-la, sinon il faudra recompiler l'app.
 - Service permanent : `deploy/devoir.service` (systemd).
 - Accès depuis l'extérieur de la maison (4G) : le plus simple est [Tailscale](https://tailscale.com) sur
-  le serveur et le téléphone. Sinon, un reverse proxy HTTPS (Caddy). Les jetons de déblocage sont signés,
+  le serveur et l'iPhone. Sinon, un reverse proxy HTTPS (Caddy). Les jetons de déblocage sont signés,
   donc un faux serveur ne peut pas débloquer le téléphone.
 - Tests : `.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`
 
@@ -65,56 +82,51 @@ Les deux premiers jours, utilisez `/programme` et la conversation avec l'IA pour
 | `/nouvelle` | repart d'une conversation vierge avec l'IA |
 | texte libre | conversation avec l'IA qui gère le programme |
 
-## 3. Application Android
+## 3. Application iPhone
 
-Il faut [Android Studio](https://developer.android.com/studio), ou au moins le SDK Android et `adb`.
+Sur le Mac :
 
 ```bash
-cd android
-cp devoir.properties.example devoir.properties   # URL du serveur, DEVICE_TOKEN, clé publique, code PIN parent
-./gradlew assembleRelease
+brew install xcodegen
+cd ios
+cp Config.xcconfig.example Config.xcconfig   # équipe Apple, identifiants, URL du serveur, DEVICE_TOKEN, clé publique, code parent
+xcodegen generate
+open DevoirDuJour.xcodeproj
 ```
 
-`EXTRA_ALLOWED_PACKAGES` liste les apps utilisables pendant le blocage, par exemple l'app SMS pour
-écrire aux parents. Le téléphone et l'appareil photo sont toujours autorisés.
+Dans Xcode, vérifiez que la *capability* **Family Controls** et l'**App Group** sont actifs sur les trois
+cibles : l'app, l'extension `DevoirMonitor` qui rebloque à minuit, et l'extension `DevoirShield` qui
+affiche l'écran de blocage. Branchez l'iPhone de l'élève, puis lancez l'app (▶︎).
 
-## 4. Installation sur le téléphone de l'élève
+## 4. Mise en route sur l'iPhone
 
-Le passage en *Device Owner* exige qu'**aucun compte** ne soit présent sur le téléphone au moment de
-l'installation. Il n'est pas nécessaire de réinitialiser : supprimez temporairement le compte Google
-dans Paramètres > Comptes, puis remettez-le après.
-
-1. Activez *Options pour les développeurs* (7 appuis sur « Numéro de build »), puis *Débogage USB*.
-2. Branchez le téléphone, puis lancez :
-   ```bash
-   cd android && ./scripts/installer.sh
-   ```
-3. Rajoutez le compte Google.
-4. Écran parent : faites un **appui long sur le titre « Devoir du jour »** et entrez le code PIN. Il permet de :
-   - débloquer 1 h ou jusqu'à minuit ;
-   - interdire le débogage USB (à faire une fois que tout marche) ;
-   - désactiver complètement le contrôle (avant de désinstaller l'app).
+1. Ouvrez l'app et appuyez sur **Autoriser**. En mode `child`, le parent approuve avec son identifiant Apple.
+2. Faites un **appui long sur le titre « Devoir du jour »** et entrez le code parent.
+3. **Choisissez les apps autorisées** pendant le blocage. Sélectionnez-les une par une et incluez
+   **Devoir du jour**, Téléphone et Messages. Tant que cette liste est vide, rien n'est bloqué : c'est
+   une sécurité pour que l'app ne se bloque pas elle-même.
+4. L'écran parent permet aussi de débloquer 1 h ou jusqu'à minuit, et de tout désactiver avant de supprimer l'app.
 
 ## Ce qui est bloqué, et les limites
 
-Pendant le blocage :
-- l'élève ne peut pas quitter l'app : mode kiosque, boutons Accueil et Applications récentes inactifs ;
-- le mode sans échec, la réinitialisation d'usine, l'ajout d'utilisateurs et le changement d'heure
-  sont interdits ;
-- l'app ne peut pas être désinstallée, et ses données ne peuvent pas être effacées ;
-- une fois l'option activée, le débogage USB est interdit.
-
-Limites connues :
-- **Appels d'urgence** : toujours possibles, et c'est voulu.
-- **Hors ligne** : sans réseau, un téléphone bloqué reste bloqué. Un téléphone déjà débloqué le reste
-  jusqu'à minuit. Le code PIN parent marche hors ligne.
+- Pendant le blocage, toutes les apps et tous les sites sont recouverts par l'écran
+  « Devoir du jour à faire », sauf les apps autorisées.
+- L'app ne peut pas être supprimée et la date et l'heure restent automatiques, même quand le
+  téléphone est débloqué.
+- Il n'y a **pas de mode kiosque** comme sur Android : l'élève garde l'écran d'accueil, le centre de
+  contrôle, etc. Seules les apps sont bloquées.
+- **Le déblocage n'a lieu qu'à l'ouverture de l'app.** iOS ne laisse pas une app tourner en arrière-plan
+  pour interroger le serveur. Après l'envoi de sa copie, l'élève rouvre « Devoir du jour » pour voir
+  la décision. Si le parent annule une validation, le rebloquage se fait aussi à la prochaine ouverture,
+  ou à minuit au plus tard. Des notifications push pourraient l'automatiser, mais demanderaient de
+  configurer APNs.
+- **Hors ligne** : un iPhone bloqué reste bloqué. Un iPhone déjà débloqué le reste jusqu'à minuit.
+  Le code parent marche hors ligne.
 - **Triche** : l'élève peut chercher la solution sur un autre appareil. La correction par l'IA rejette
   les écrans photographiés et les corrigés imprimés, mais pas un corrigé recopié à la main. Le regard du
   parent reste le meilleur garde-fou.
-- **Panne du serveur ou de l'API** : le parent est prévenu sur Telegram. `/debloquer` et le code PIN
+- **Panne du serveur ou de l'API** : le parent est prévenu sur Telegram. `/debloquer` et le code parent
   restent disponibles.
-- **Constructeurs** : les surcouches Xiaomi, Huawei et Samsung tuent parfois les alarmes en arrière-plan.
-  Le rebloquage se fait alors au premier retour sur l'écran d'accueil plutôt qu'à minuit pile.
 
 ## Coûts
 

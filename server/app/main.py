@@ -1,4 +1,4 @@
-"""Point d'entrée : API pour l'app Android + bot Telegram + boucle périodique.
+"""Point d'entrée : API pour l'app iPhone + bot Telegram + boucle périodique.
 
 Lancement : uvicorn app.main:app --host 0.0.0.0 --port 8000
 """

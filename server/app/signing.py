@@ -1,8 +1,8 @@
 """Jetons de déblocage signés (ECDSA P-256 / SHA-256).
 
 Format : base64url(payload JSON) + "." + base64url(signature DER).
-L'app Android vérifie la signature avec la clé publique embarquée
-(Signature "SHA256withECDSA"), donc un faux serveur ne peut pas débloquer le téléphone.
+L'app iPhone vérifie la signature avec la clé publique embarquée (CryptoKit, P256),
+donc un faux serveur ne peut pas débloquer le téléphone.
 """
 
 import base64

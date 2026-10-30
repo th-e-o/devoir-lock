@@ -183,7 +183,7 @@ class Service:
             )
 
     def device_state(self) -> dict[str, Any]:
-        """État renvoyé à l'app Android."""
+        """État renvoyé à l'app iPhone."""
         date = self.today()
         assignment = self.db.get_assignment(date)
         if not assignment:

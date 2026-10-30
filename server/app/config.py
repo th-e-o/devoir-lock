@@ -17,7 +17,7 @@ def _env(name: str, default: str | None = None) -> str:
 class Settings:
     data_dir: Path
     timezone: ZoneInfo
-    # Jeton partagé avec l'app Android (en-tête Authorization: Bearer ...)
+    # Jeton partagé avec l'app iPhone (en-tête Authorization: Bearer ...)
     device_token: str
     # Identifiant de l'appareil, inclus dans les jetons de déblocage signés
     device_id: str

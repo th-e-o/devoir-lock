@@ -1,0 +1,22 @@
+// Copier en Config.xcconfig (non versionné) et remplir.
+// Attention : dans un .xcconfig, « // » commence un commentaire. Pour une URL, écrire http:/$()/...
+
+// Identifiant d'équipe Apple Developer (Xcode > Settings > Accounts)
+DEVELOPMENT_TEAM = ABCDE12345
+// Préfixe unique des identifiants (ex. fr.nomdefamille)
+BUNDLE_PREFIX = fr.famille
+APP_GROUP = group.fr.famille.devoirdujour
+
+// URL du serveur vue depuis l'iPhone (Tailscale conseillé)
+SERVER_URL = http:/$()/serveur-maison:8000
+// Mêmes valeurs que DEVICE_TOKEN et DEVICE_ID côté serveur
+DEVICE_TOKEN = change-moi
+DEVICE_ID = telephone-eleve
+// Clé publique affichée par le serveur au démarrage (GET /api/public-key)
+SERVER_PUBLIC_KEY = MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+// SHA-256 du code parent : echo -n 1234 | shasum -a 256
+ADMIN_PIN_SHA256 = 03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4
+
+// child : compte enfant du Partage familial (recommandé, l'élève ne peut pas retirer le blocage)
+// individual : l'élève autorise lui-même l'app (il peut la désactiver dans Réglages)
+AUTHORIZATION_MODE = child
