@@ -1,0 +1,8 @@
+[Unit]
+Description=Devoir du jour : mise à jour automatique depuis GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/devoir-lock/server/deploy/auto-update.sh
