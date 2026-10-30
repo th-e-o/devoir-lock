@@ -61,7 +61,7 @@ Les deux premiers jours, utilisez `/programme` et la conversation avec l'IA pour
 
 ## 3. Page de l'élève
 
-Sur l'iPhone, ouvrez dans Safari `https://VOTRE-SERVEUR/eleve#k=CODE`, où `CODE` est la valeur de
+Sur l'iPhone, ouvrez dans Safari `https://devoir.deltastat.fr/eleve#k=CODE`, où `CODE` est la valeur de
 `DEVICE_TOKEN`. Puis touchez Partager > **Sur l'écran d'accueil** : la page s'ouvre ensuite comme une app.
 
 La page affiche l'énoncé et la réponse du parent ou de l'IA. Le bouton photo ouvre directement l'appareil
@@ -72,11 +72,11 @@ photo, sans accès à la photothèque, et les photos sont réduites avant l'envo
 ### 4a. Créer le raccourci « Devoir »
 App **Raccourcis** > onglet *Raccourcis* > **+**, nommez-le « Devoir » et ajoutez dans l'ordre :
 
-1. **Obtenir le contenu de l'URL** : `https://VOTRE-SERVEUR/api/statut?k=CODE`
+1. **Obtenir le contenu de l'URL** : `https://devoir.deltastat.fr/api/statut?k=CODE`
 2. **Si** : *Contenu de l'URL* **est** `bloque`
 3. Dans le « Si » :
    - **Afficher la notification** : « Devoir du jour à faire » (facultatif) ;
-   - **Ouvrir les URL** : `https://VOTRE-SERVEUR/eleve#k=CODE`
+   - **Ouvrir les URL** : `https://devoir.deltastat.fr/eleve#k=CODE`
 4. Laissez le « Sinon » vide.
 
 ### 4b. Créer l'automatisation

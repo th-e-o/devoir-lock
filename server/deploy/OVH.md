@@ -1,7 +1,6 @@
 # Déploiement sur un VPS OVH avec votre nom de domaine
 
-On suppose un VPS sous **Debian 12 ou Ubuntu 24.04** et un sous-domaine, par exemple
-`devoir.mondomaine.fr`. Remplacez-le partout ci-dessous.
+On suppose un VPS sous **Debian 12 ou Ubuntu 24.04**, servi à l'adresse `devoir.deltastat.fr`.
 
 ## 1. DNS
 
@@ -12,7 +11,7 @@ est chez OVH), ajoutez un enregistrement :
 |---|---|---|
 | A | `devoir` | adresse IPv4 du VPS |
 
-La propagation prend de quelques minutes à quelques heures. Pour vérifier : `dig +short devoir.mondomaine.fr`.
+La propagation prend de quelques minutes à quelques heures. Pour vérifier : `dig +short devoir.deltastat.fr`.
 
 ## 2. Sécuriser le VPS
 
@@ -64,17 +63,16 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo 
 sudo apt update && sudo apt install -y caddy
 
 sudo cp /opt/devoir-lock/server/deploy/Caddyfile /etc/caddy/Caddyfile
-sudo sed -i 's/devoir.example.fr/devoir.mondomaine.fr/' /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-Vérification depuis n'importe où : `https://devoir.mondomaine.fr/health` doit afficher `{"ok":true}`.
+Vérification depuis n'importe où : `https://devoir.deltastat.fr/health` doit afficher `{"ok":true}`.
 
 ## 5. Finaliser
 
 - Envoyez `/start` au bot Telegram, mettez l'identifiant obtenu dans `PARENT_CHAT_IDS` (`.env`),
   puis `sudo systemctl restart devoir`.
-- Utilisez `https://devoir.mondomaine.fr` comme `VOTRE-SERVEUR` dans le README (page élève et Raccourci).
+- L’adresse `https://devoir.deltastat.fr` est déjà renseignée dans le README (page élève et Raccourci).
 
 ## Entretien
 

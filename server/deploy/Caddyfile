@@ -1,6 +1,6 @@
-# /etc/caddy/Caddyfile — remplacer devoir.example.fr par votre sous-domaine.
+# /etc/caddy/Caddyfile
 # Caddy obtient et renouvelle le certificat HTTPS automatiquement.
-devoir.example.fr {
+devoir.deltastat.fr {
 	encode gzip
 	request_body {
 		max_size 60MB
