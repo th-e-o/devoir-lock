@@ -34,7 +34,10 @@ et l'app **Raccourcis** intégrée à l'iPhone.
 1. Dans Telegram, ouvrez **@BotFather** → `/newbot` → notez le jeton.
 2. Vous récupérerez votre identifiant de chat à l'étape 2 en envoyant `/start` au bot.
 
-## 2. Serveur (Raspberry Pi, NAS, PC allumé en permanence ou petit VPS)
+## 2. Serveur
+
+**Sur un VPS OVH avec votre nom de domaine : suivez [`server/deploy/OVH.md`](server/deploy/OVH.md)**
+(DNS, pare-feu, service systemd, HTTPS automatique avec Caddy). Pour un premier essai en local :
 
 ```bash
 cd server
@@ -49,10 +52,8 @@ set -a; . ./.env; set +a
   (plusieurs parents : séparés par des virgules), puis redémarrez.
 - Service permanent : `deploy/devoir.service` (systemd).
 - **Le serveur doit être joignable en HTTPS depuis Internet**, pas seulement depuis le wifi de la maison.
-  Sinon, l'élève n'aurait qu'à couper le wifi ou le VPN pour que le Raccourci échoue. Deux solutions gratuites :
-  [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) (`tailscale funnel 8000`, qui donne une adresse
-  `https://machine.nom.ts.net`) ou [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
-  Tout est protégé par le code d'accès `DEVICE_TOKEN` : prenez une valeur longue et aléatoire.
+  Sinon, l'élève n'aurait qu'à couper le wifi pour que le Raccourci échoue. C'est le cas d'un VPS avec
+  votre nom de domaine. Tout est protégé par le code d'accès `DEVICE_TOKEN` : prenez une valeur longue et aléatoire.
 - Tests : `.venv/bin/pip install -r requirements-dev.txt && .venv/bin/python -m pytest`
 
 Les deux premiers jours, utilisez `/programme` et la conversation avec l'IA pour décrire la progression

@@ -1,15 +1,15 @@
 # systemd : sudo cp deploy/devoir.service /etc/systemd/system/ && sudo systemctl enable --now devoir
-# Adapter User et WorkingDirectory.
 [Unit]
 Description=Devoir du jour (serveur)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=pi
-WorkingDirectory=/home/pi/devoir-lock/server
-EnvironmentFile=/home/pi/devoir-lock/server/.env
-ExecStart=/home/pi/devoir-lock/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+User=devoir
+WorkingDirectory=/opt/devoir-lock/server
+EnvironmentFile=/opt/devoir-lock/server/.env
+# Écoute en local uniquement : Caddy fait le HTTPS devant.
+ExecStart=/opt/devoir-lock/server/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers
 Restart=always
 RestartSec=5
 

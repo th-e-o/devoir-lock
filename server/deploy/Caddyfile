@@ -1,0 +1,9 @@
+# /etc/caddy/Caddyfile — remplacer devoir.example.fr par votre sous-domaine.
+# Caddy obtient et renouvelle le certificat HTTPS automatiquement.
+devoir.example.fr {
+	encode gzip
+	request_body {
+		max_size 60MB
+	}
+	reverse_proxy 127.0.0.1:8000
+}
