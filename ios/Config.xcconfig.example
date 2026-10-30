@@ -17,6 +17,6 @@ SERVER_PUBLIC_KEY = MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
 // SHA-256 du code parent : echo -n 1234 | shasum -a 256
 ADMIN_PIN_SHA256 = 03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4
 
-// child : compte enfant du Partage familial (recommandé, l'élève ne peut pas retirer le blocage)
-// individual : l'élève autorise lui-même l'app (il peut la désactiver dans Réglages)
-AUTHORIZATION_MODE = child
+// individual : l'élève autorise lui-même l'app (il peut la désactiver dans Réglages > Temps d'écran)
+// child : compte enfant du Partage familial (élève mineur uniquement ; il ne peut pas retirer le blocage)
+AUTHORIZATION_MODE = individual
