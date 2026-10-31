@@ -6,7 +6,7 @@ import secrets
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date as Date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -24,6 +24,9 @@ PHOTO_MAX_SIDE = 2000
 CHAT_MAX_MESSAGES = 80  # au-delà, la conversation avec l'IA repart de zéro
 GENERATION_RETRY = timedelta(minutes=10)
 GRADING_RETRY = timedelta(minutes=5)
+TRACKING_RETRY = timedelta(minutes=10)
+FICHE_RETRY = timedelta(minutes=30)
+FICHE_WEEKDAY, FICHE_HOUR = 6, 18  # dimanche 18 h
 
 DEFAULT_NIVEAU = "début de première année de classe préparatoire scientifique (MPSI / MP2I)"
 DEFAULT_DUREE_MIN = 30
@@ -61,6 +64,8 @@ Commandes :
 /programme - programme actuel
 /nouvelle - repartir d'une conversation vierge avec l'IA
 /sujet <texte> - suggérer un sujet pour un prochain devoir
+/progression - carnet de progression de l'élève
+/fiche - générer maintenant la fiche de la semaine
 Tout autre message est envoyé à l'IA qui gère le programme (ex. « on passe aux nombres \
 complexes lundi, insiste sur les racines n-ièmes »)."""
 
@@ -73,9 +78,18 @@ class Tutor(Protocol):
         reglages: dict[str, Any],
         consignes: str | None = None,
         sujet: str | None = None,
+        progression: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
     async def grade(self, assignment: dict[str, Any], photos: list[bytes], reglages: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def update_progress(
+        self, progression: dict[str, Any] | None, seance: dict[str, Any], reglages: dict[str, Any]
+    ) -> dict[str, Any]: ...
+
+    async def weekly_sheet(
+        self, semaine: str, seances: list[dict[str, Any]], progression: dict[str, Any] | None, reglages: dict[str, Any]
+    ) -> dict[str, Any]: ...
 
     async def supervisor_turn(
         self, history: list[dict[str, Any]], user_text: str, run_tool: Any, reglages: dict[str, Any]
@@ -125,6 +139,10 @@ class Service:
         self._tasks: set[asyncio.Task] = set()
         self._last_generation_attempt: dict[str, datetime] = {}
         self._grading_failed_at: dict[int, datetime] = {}
+        self._tracking: set[int] = set()
+        self._tracking_failed_at: dict[int, datetime] = {}
+        self._fiche_attempt: dict[str, datetime] = {}
+        self._fiche_lock = asyncio.Lock()
         if not self.db.get_programme():
             self.db.set_programme(DEFAULT_PROGRAMME, self.now())
 
@@ -191,6 +209,104 @@ class Service:
         base = self.db.get_kv("public_base_url") or "https://VOTRE-SERVEUR"
         return f"{base}/prof#k={self.prof_token()}"
 
+    # --- carnet de progression -------------------------------------------------
+
+    def progression(self) -> dict[str, Any] | None:
+        raw = self.db.get_kv("progression")
+        return json.loads(raw) if raw else None
+
+    async def track_progress(self, submission_id: int) -> None:
+        """Après la décision sur une copie : analyse (si l'IA ne l'a pas corrigée) puis mise à jour du carnet."""
+        if submission_id in self._tracking:
+            return
+        self._tracking.add(submission_id)
+        try:
+            sub = self.db.get_submission(submission_id)
+            if not sub or self.db.get_kv(f"suivi:{submission_id}"):
+                return
+            assignment = self.db.one("SELECT * FROM assignments WHERE id = ?", (sub["assignment_id"],))
+            report = json.loads(sub["llm_report"]) if sub["llm_report"] else None
+            if report is None:
+                photos = [Path(p).read_bytes() for p in json.loads(sub["photos"])]
+                report = await self.tutor.grade(assignment, photos, self.reglages())
+                self.db.execute(
+                    "UPDATE submissions SET llm_report = ? WHERE id = ?",
+                    (json.dumps(report, ensure_ascii=False), submission_id),
+                )
+            seance = {
+                "date": assignment["date"],
+                "devoir": assignment["titre"],
+                "notions": json.loads(assignment["notions"]),
+                "decision": sub["status"],
+                "decide_par": sub["decided_by"],
+                "retour_du_professeur": sub["feedback"] if sub["decided_by"] == "prof" else None,
+                "analyse_de_la_copie": report,
+            }
+            progression = await self.tutor.update_progress(self.progression(), seance, self.reglages())
+            self.db.set_kv("progression", json.dumps(progression, ensure_ascii=False))
+            self.db.set_kv(f"suivi:{submission_id}", self.now().isoformat())
+            self._tracking_failed_at.pop(submission_id, None)
+        except Exception:
+            log.exception("Mise à jour du carnet de progression impossible")
+            self._tracking_failed_at[submission_id] = self.now()
+        finally:
+            self._tracking.discard(submission_id)
+
+    def _progression_text(self) -> str:
+        p = self.progression()
+        if not p:
+            return "Pas encore de suivi : le carnet se remplit après chaque copie corrigée."
+        icons = {"acquis": "🟢", "en_cours": "🟡", "fragile": "🔴"}
+        lines = [f"{icons.get(n['maitrise'], '•')} {n['notion']} : {n['observations']}" for n in p["notions"]]
+        text = "Carnet de progression\n\n" + "\n".join(lines)
+        if p["points_forts"]:
+            text += "\n\nPoints forts : " + " ; ".join(p["points_forts"])
+        if p["difficultes"]:
+            text += "\nDifficultés : " + " ; ".join(p["difficultes"])
+        return text + f"\n\nProchaine étape : {p['prochaine_etape']}"
+
+    # --- fiche de la semaine ------------------------------------------------------
+
+    def _week(self, day: Date | None = None) -> tuple[str, str, str]:
+        day = day or self.now().date()
+        year, week, _ = day.isocalendar()
+        monday = day - timedelta(days=day.weekday())
+        return f"{year}-W{week:02d}", monday.isoformat(), (monday + timedelta(days=6)).isoformat()
+
+    async def generate_weekly_sheet(self) -> dict[str, Any]:
+        """Fiche de la semaine en cours (remplace celle déjà générée pour cette semaine)."""
+        semaine, debut, fin = self._week()
+        async with self._fiche_lock:
+            self._fiche_attempt[semaine] = self.now()
+            seances = []
+            for h in self.db.sessions_between(debut, fin):
+                report = json.loads(h["llm_report"]) if h["llm_report"] else None
+                seances.append({
+                    "date": h["date"],
+                    "devoir": h["titre"],
+                    "notions": json.loads(h["notions"]),
+                    "enonce": h["enonce"],
+                    "statut": h["status"],
+                    "analyse_de_la_copie": report,
+                })
+            if not seances:
+                raise ValueError("Aucun devoir cette semaine : pas de fiche à faire.")
+            data = await self.tutor.weekly_sheet(
+                f"du {debut} au {fin}", seances, self.progression(), self.reglages()
+            )
+            fiche_id = self.db.save_fiche(semaine, debut, fin, data, self.now())
+        await self.notify_profs(
+            f"📄 Fiche de la semaine prête : {data['titre']}\n\n{data['resume_prof']}\n\n"
+            f"L'élève la voit sur sa page. Version complète dans l'interface professeur :\n{self.prof_link()}"
+        )
+        return self.db.get_fiche(fiche_id)
+
+    async def _weekly_sheet_safely(self) -> None:
+        try:
+            await self.generate_weekly_sheet()
+        except Exception:
+            log.exception("Fiche de la semaine impossible")
+
     def prof_overview(self) -> dict[str, Any]:
         """Tout ce qu'affiche l'interface professeur."""
         state = self.device_state()
@@ -225,6 +341,8 @@ class Service:
                 "rapport_ia": json.loads(latest["llm_report"]) if latest["llm_report"] else None,
             } if latest else None,
             "reglages": self.reglages(),
+            "progression": self.progression(),
+            "fiches": self.db.list_fiches(),
             "programme": self.db.get_programme(),
             "sujets": self.db.pending_suggestions(),
             "historique": history,
@@ -249,6 +367,7 @@ class Service:
                 self.reglages(),
                 consignes=consignes,
                 sujet=suggestion["texte"] if suggestion else None,
+                progression=self.progression(),
             )
             if suggestion:
                 self.db.mark_suggestion_used(suggestion["id"], date)
@@ -483,6 +602,30 @@ class Service:
             self.db.execute("UPDATE submissions SET llm_started = 1 WHERE id = ?", (row["id"],))
             self._spawn(self.grade_with_llm(row["id"]))
 
+        # Carnet de progression : copies décidées récemment et pas encore prises en compte.
+        recent = (now - timedelta(days=3)).isoformat()
+        for row in self.db.all(
+            "SELECT id FROM submissions WHERE status IN ('valide', 'refuse') AND created_at >= ?", (recent,)
+        ):
+            sub_id = row["id"]
+            failed_at = self._tracking_failed_at.get(sub_id)
+            if sub_id in self._tracking or self.db.get_kv(f"suivi:{sub_id}"):
+                continue
+            if failed_at and now - failed_at < TRACKING_RETRY:
+                continue
+            self._spawn(self.track_progress(sub_id))
+
+        # Fiche de la semaine, le dimanche soir.
+        if now.weekday() == FICHE_WEEKDAY and now.hour >= FICHE_HOUR and not self._fiche_lock.locked():
+            semaine, debut, fin = self._week()
+            last = self._fiche_attempt.get(semaine)
+            if (
+                not self.db.fiche_for_week(semaine)
+                and self.db.sessions_between(debut, fin)
+                and not (last and now - last < FICHE_RETRY)
+            ):
+                self._spawn(self._weekly_sheet_safely())
+
     # --- Telegram -------------------------------------------------------------
 
     async def handle_update(self, update: dict[str, Any]) -> None:
@@ -582,6 +725,11 @@ class Service:
                     await self.bot.send_message(
                         chat_id, f"Sujet ajouté ({len(self.db.pending_suggestions())} en attente)."
                     )
+            elif command == "/progression":
+                await self.bot.send_message(chat_id, self._progression_text())
+            elif command == "/fiche":
+                await self.bot.send_message(chat_id, "Rédaction de la fiche de la semaine… (1 à 2 min)")
+                await self.generate_weekly_sheet()
             elif command == "/nouvelle":
                 self.db.clear_chat()
                 await self.bot.send_message(chat_id, "Nouvelle conversation.")
@@ -655,6 +803,8 @@ class Service:
                 },
                 ensure_ascii=False,
             )
+        if name == "voir_progression":
+            return json.dumps(self.progression(), ensure_ascii=False) if self.progression() else "(pas encore de suivi)"
         if name == "regler_niveau":
             self.set_reglages(args["niveau"], args["duree_min"])
             return f"Réglages enregistrés : {self.reglages()}"

@@ -135,6 +135,32 @@ def create_app(service: Service | None = None, bot: TelegramBot | None = None, b
             raise HTTPException(status_code=401, detail="Lien professeur invalide : demandez-en un avec /prof sur Telegram")
         return svc
 
+    def student_or_prof(
+        authorization: Annotated[str | None, Header()] = None,
+        svc: Service = Depends(get_service),
+    ) -> tuple[Service, bool]:
+        """Renvoie (service, est_professeur)."""
+        given = (authorization or "").encode()
+        if hmac.compare_digest(given, f"Bearer {svc.prof_token()}".encode()):
+            return svc, True
+        if hmac.compare_digest(given, f"Bearer {svc.s.device_token}".encode()):
+            return svc, False
+        raise HTTPException(status_code=401, detail="Code d'accès invalide")
+
+    @app.get("/api/fiches")
+    async def list_sheets(access: tuple[Service, bool] = Depends(student_or_prof)) -> list[dict]:
+        return access[0].db.list_fiches()
+
+    @app.get("/api/fiches/{fiche_id}")
+    async def get_sheet(fiche_id: int, access: tuple[Service, bool] = Depends(student_or_prof)) -> dict:
+        svc, is_prof = access
+        fiche = svc.db.get_fiche(fiche_id)
+        if not fiche:
+            raise HTTPException(status_code=404, detail="Fiche introuvable")
+        if not is_prof:
+            fiche.pop("resume_prof")  # destiné au professeur
+        return fiche
+
     @app.get("/prof")
     def prof_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "prof.html", headers={"Cache-Control": "no-cache"})
@@ -179,6 +205,13 @@ def create_app(service: Service | None = None, bot: TelegramBot | None = None, b
         except (ValueError, LLMError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         return svc.prof_overview()
+
+    @app.post("/api/prof/fiche")
+    async def prof_weekly_sheet(svc: Service = Depends(require_prof)) -> dict:
+        try:
+            return await svc.generate_weekly_sheet()
+        except (ValueError, LLMError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.post("/api/prof/debloquer")
     async def prof_unlock(svc: Service = Depends(require_prof)) -> dict:

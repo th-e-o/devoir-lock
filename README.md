@@ -19,7 +19,16 @@ et l'app **Raccourcis** intégrée à l'iPhone.
   les sujets suggérés par le professeur et l'historique (il revient sur les notions ratées).
   Par défaut, la progression est celle du début de sup (MPSI / MP2I). Le corrigé n'est jamais
   montré à l'élève.
-- **Interface professeur** (lien envoyé par `/prof` sur Telegram) : régler le niveau et la durée
+- **Carnet de progression** : après chaque copie (corrigée par le professeur ou par l'IA), l'IA
+  analyse le travail et met à jour la maîtrise de l'élève notion par notion (acquis, en cours,
+  fragile), ses points forts, ses difficultés récurrentes et la prochaine étape. Le générateur s'en
+  sert pour construire le parcours : retour régulier sur les notions fragiles, notion suivante quand
+  les précédentes tiennent, difficulté ajustée aux derniers résultats.
+- **Fiche de la semaine** : chaque dimanche à 18 h, l'IA rédige une fiche de révision (notions de la
+  semaine, l'essentiel du cours, méthodes, erreurs de l'élève, exercices courts). L'élève la retrouve
+  sur sa page, même quand le téléphone est bloqué ; le professeur reçoit un résumé sur Telegram.
+- **Interface professeur** (lien envoyé par `/prof` sur Telegram) : suivre le carnet de progression
+  et les fiches, régler le niveau et la durée
   visée, suggérer des sujets pour les prochains devoirs, modifier le programme, voir l'énoncé et le
   corrigé du jour, régénérer le devoir, consulter l'historique et les notes.
 - **Dialogue avec l'IA** : le professeur peut aussi écrire à l'IA depuis Telegram (« on passe aux
@@ -122,6 +131,8 @@ Sur l'iPhone de l'élève, dans **Réglages > Temps d'écran** :
 | `/prof` | lien vers l'interface professeur (`/prof nouveau` change le lien) |
 | `/sujet <texte>` | suggère un sujet pour un prochain devoir (`/sujet` seul : la liste) |
 | `/programme` | affiche le niveau, la durée visée et le programme |
+| `/progression` | carnet de progression de l'élève |
+| `/fiche` | génère maintenant la fiche de la semaine |
 | `/nouvelle` | repart d'une conversation vierge avec l'IA |
 | texte libre | conversation avec l'IA qui gère le programme |
 
@@ -142,5 +153,6 @@ de tête, mais il n'est pas inviolable :
 
 - Apple, Telegram, Tailscale et Cloudflare : gratuits.
 - Serveur : une machine déjà allumée, ou un Raspberry Pi (environ 60 €, une fois).
-- API Claude : `claude-opus-5-5` par défaut (`CLAUDE_MODEL`). Comptez de l'ordre de 0,20 à 0,60 $ par jour
-  (estimation, à vérifier dans la console Anthropic). Avec `claude-sonnet-5-5`, c'est environ deux fois moins cher.
+- API Claude : `claude-opus-5-5` par défaut (`CLAUDE_MODEL`). Chaque jour : une génération, une analyse de
+  la copie et une mise à jour du carnet, plus une fiche par semaine. Comptez de l'ordre de 0,30 à 0,80 $
+  par jour (estimation, à vérifier dans la console Anthropic). Avec `claude-sonnet-5-5`, c'est environ deux fois moins cher.

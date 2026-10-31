@@ -28,8 +28,13 @@ class FakeTutor:
         self.sujets = []
         self.reglages = []
         self.programmes = []
+        self.progressions_vues = []
+        self.grades = 0
+        self.seances = []
+        self.fiches = []
 
-    async def generate_assignment(self, programme, history, reglages, consignes=None, sujet=None):
+    async def generate_assignment(self, programme, history, reglages, consignes=None, sujet=None, progression=None):
+        self.progressions_vues.append(progression)
         self.generated += 1
         self.consignes.append(consignes)
         self.sujets.append(sujet)
@@ -44,7 +49,19 @@ class FakeTutor:
             "duree_estimee_min": 45,
         }
 
+    async def update_progress(self, progression, seance, reglages):
+        self.seances.append(seance)
+        notions = list((progression or {}).get("notions", []))
+        notions.append({"notion": seance["notions"][0], "maitrise": "en_cours", "observations": "ok",
+                        "derniere_seance": seance["date"]})
+        return {"notions": notions, "points_forts": [], "difficultes": [], "prochaine_etape": "continuer"}
+
+    async def weekly_sheet(self, semaine, seances, progression, reglages):
+        self.fiches.append((semaine, seances))
+        return {"titre": "Fiche suites", "contenu": "Rappel : $u_{n+1} = f(u_n)$", "resume_prof": "Bonne semaine"}
+
     async def grade(self, assignment, photos, reglages):
+        self.grades += 1
         assert photos and all(p[:2] == b"\xff\xd8" for p in photos)  # JPEG
         return {
             "verdict": self.verdict,
@@ -379,3 +396,72 @@ def test_parent_chat_ids_still_accepted(monkeypatch, tmp_path):
     assert load_settings().prof_chat_ids == {12, 34}
     monkeypatch.setenv("PROF_CHAT_IDS", "56")
     assert load_settings().prof_chat_ids == {56}
+
+
+async def test_progress_log_after_prof_and_llm_decisions(env):
+    service, tutor, bot, clock, client = env
+    await service.ensure_today_assignment()
+    assert tutor.progressions_vues[-1] is None
+    sub_id = (await service.create_submission([jpeg()]))["submission_id"]
+    await callback(service, f"ok:{sub_id}")
+    # Le professeur a décidé : l'IA analyse quand même la copie pour le carnet, sans changer la décision.
+    await service.tick()
+    await service.wait_background()
+    sub = service.db.get_submission(sub_id)
+    assert tutor.grades == 1 and sub["decided_by"] == "prof" and sub["llm_report"]
+    assert tutor.seances[-1]["decision"] == "valide" and tutor.seances[-1]["analyse_de_la_copie"]["note_sur_20"] == 15
+    assert len(service.progression()["notions"]) == 1
+    await service.tick()
+    await service.wait_background()
+    assert len(tutor.seances) == 1  # pas deux fois
+
+    # Jour suivant : le générateur reçoit le carnet ; copie corrigée par l'IA, pas de seconde analyse.
+    clock.now += timedelta(days=1)
+    await service.ensure_today_assignment()
+    assert tutor.progressions_vues[-1]["notions"][0]["notion"] == "suites"
+    sub2 = (await service.create_submission([jpeg()]))["submission_id"]
+    clock.now += timedelta(minutes=16)
+    await service.tick()
+    await service.wait_background()
+    await service.tick()
+    await service.wait_background()
+    assert tutor.grades == 2 and len(tutor.seances) == 2
+    assert service.db.get_submission(sub2)["decided_by"] == "llm"
+
+    await message(service, "/progression")
+    assert "suites" in bot.sent[-1]["text"] and "Prochaine étape" in bot.sent[-1]["text"]
+
+
+async def test_weekly_sheet(env):
+    service, tutor, bot, clock, client = env
+    await message(service, "/fiche")
+    assert "Aucun devoir" in bot.sent[-1]["text"]
+
+    await service.ensure_today_assignment()  # vendredi 30 octobre
+    clock.now = datetime(2026, 11, 1, 17, 0, tzinfo=TZ)  # dimanche 17 h : trop tôt
+    await service.tick()
+    await service.wait_background()
+    assert tutor.fiches == []
+    clock.now = datetime(2026, 11, 1, 18, 5, tzinfo=TZ)
+    await service.tick()
+    await service.wait_background()
+    assert len(tutor.fiches) == 1
+    semaine, seances = tutor.fiches[0]
+    assert "2026-10-26" in semaine and [x["date"] for x in seances] == ["2026-10-30", "2026-11-01"]
+    assert "Fiche de la semaine prête" in bot.sent[-1]["text"]
+    await service.tick()
+    await service.wait_background()
+    assert len(tutor.fiches) == 1  # une seule par semaine
+
+    fiches = client.get("/api/fiches", headers=AUTH).json()
+    assert [f["semaine"] for f in fiches] == ["2026-W44"]
+    eleve = client.get(f"/api/fiches/{fiches[0]['id']}", headers=AUTH).json()
+    assert eleve["contenu"].startswith("Rappel") and "resume_prof" not in eleve
+    prof = {"Authorization": f"Bearer {service.prof_token()}"}
+    assert client.get(f"/api/fiches/{fiches[0]['id']}", headers=prof).json()["resume_prof"] == "Bonne semaine"
+    assert client.get("/api/fiches").status_code == 401
+    overview = client.get("/api/prof", headers=prof).json()
+    assert overview["fiches"][0]["titre"] == "Fiche suites"
+    # Régénération manuelle : remplace la fiche de la semaine.
+    assert client.post("/api/prof/fiche", headers=prof).status_code == 200
+    assert len(client.get("/api/fiches", headers=AUTH).json()) == 1

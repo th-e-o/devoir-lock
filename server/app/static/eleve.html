@@ -36,6 +36,8 @@
   .vignettes { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
   .vignettes img { width: 64px; height: 84px; object-fit: cover; border-radius: 6px; }
   .cache { display: none; }
+  .fiche-lien { display: block; width: 100%; text-align: left; background: var(--carte); color: var(--texte);
+                font-weight: 500; margin: 6px 0; }
 </style>
 </head>
 <body>
@@ -57,6 +59,11 @@
     <input id="photo" class="cache" type="file" accept="image/*" capture="environment">
     <button id="envoyer" disabled>Envoyer</button>
     <button id="effacer" class="secondaire" disabled>Effacer les pages</button>
+  </div>
+  <div id="bloc-fiches" class="cache">
+    <h2>Fiches de révision</h2>
+    <div id="liste-fiches"></div>
+    <div id="fiche" class="carte cache"></div>
   </div>
 </div>
 
@@ -98,20 +105,49 @@ function demanderCode() {
 }
 
 // Formules extraites avant Markdown (sinon « _ » et « * » seraient pris pour de l'italique).
-function rendreEnonce(etat) {
+function markdownMaths(texte) {
   const maths = [];
-  const src = etat.enonce.replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g, (_, bloc, ligne) => {
+  const src = texte.replace(/\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g, (_, bloc, ligne) => {
     maths.push({ tex: bloc !== undefined ? bloc : ligne, display: bloc !== undefined });
     return "@@MATH" + (maths.length - 1) + "@@";
   });
-  let html = marked.parse(src);
-  html = html.replace(/@@MATH(\d+)@@/g, (_, i) => {
+  return marked.parse(src).replace(/@@MATH(\d+)@@/g, (_, i) => {
     const m = maths[+i];
     return katex.renderToString(m.tex, { displayMode: m.display, throwOnError: false });
   });
+}
+
+let fichesConnues = "";
+async function chargerFiches() {
+  const fiches = await api("/api/fiches");
+  const cle = JSON.stringify(fiches);
+  if (cle === fichesConnues) return;
+  fichesConnues = cle;
+  afficher("bloc-fiches", fiches.length > 0);
+  const liste = $("liste-fiches");
+  liste.innerHTML = "";
+  for (const f of fiches) {
+    const b = document.createElement("button");
+    b.className = "fiche-lien";
+    b.textContent = "📄 " + f.titre + " (semaine du " + new Date(f.debut + "T12:00").toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + ")";
+    b.addEventListener("click", async () => {
+      const fiche = await api("/api/fiches/" + f.id);
+      const titre = document.createElement("h2");
+      titre.textContent = fiche.titre;
+      $("fiche").innerHTML = markdownMaths(fiche.contenu);
+      $("fiche").prepend(titre);
+      afficher("fiche", true);
+      $("fiche").scrollIntoView({ behavior: "smooth" });
+    });
+    liste.append(b);
+  }
+}
+
+function rendreEnonce(etat) {
+  const html = markdownMaths(etat.enonce);
   const titre = document.createElement("h2");
   titre.textContent = etat.titre;
-  $("devoir").innerHTML = (etat.duree_min ? '<div class="meta">Durée indicative : ' + etat.duree_min + " min</div>" : "") + html;
+  $("devoir").innerHTML = (etat.duree_min ? '<div class="meta">⏱ Temps conseillé : ' + etat.duree_min + " min</div>" : "") + html;
   $("devoir").prepend(titre);
 }
 
@@ -140,6 +176,7 @@ async function synchroniser() {
       dernierEnonce = etat.enonce;
     }
     afficher("devoir", !!etat.enonce);
+    await chargerFiches();
   } catch (e) {
     $("statut").textContent = "Hors ligne : " + e.message;
     $("statut").classList.remove("ok");

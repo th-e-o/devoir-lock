@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS suggestions (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS fiches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    semaine TEXT NOT NULL UNIQUE,   -- ex. 2026-W44
+    debut TEXT NOT NULL,
+    fin TEXT NOT NULL,
+    titre TEXT NOT NULL,
+    contenu TEXT NOT NULL,          -- Markdown + LaTeX
+    resume_prof TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -164,6 +175,46 @@ class Database:
             "SELECT * FROM submissions WHERE assignment_id = ? ORDER BY id DESC LIMIT 1",
             (assignment_id,),
         )
+
+    def sessions_between(self, debut: str, fin: str) -> list[dict[str, Any]]:
+        """Devoirs entre deux dates (incluses) avec leur dernière copie, du plus ancien au plus récent."""
+        return self.all(
+            """
+            SELECT a.date, a.titre, a.notions, a.enonce, a.status, a.validated_by,
+                   s.status AS derniere_copie, s.feedback, s.llm_report
+            FROM assignments a
+            LEFT JOIN submissions s ON s.id = (
+                SELECT MAX(id) FROM submissions WHERE assignment_id = a.id
+            )
+            WHERE a.date BETWEEN ? AND ?
+            ORDER BY a.date
+            """,
+            (debut, fin),
+        )
+
+    # --- fiches de la semaine ---------------------------------------------------
+
+    def list_fiches(self) -> list[dict[str, Any]]:
+        return self.all("SELECT id, semaine, debut, fin, titre, created_at FROM fiches ORDER BY semaine DESC")
+
+    def get_fiche(self, fiche_id: int) -> dict[str, Any] | None:
+        return self.one("SELECT * FROM fiches WHERE id = ?", (fiche_id,))
+
+    def fiche_for_week(self, semaine: str) -> dict[str, Any] | None:
+        return self.one("SELECT * FROM fiches WHERE semaine = ?", (semaine,))
+
+    def save_fiche(self, semaine: str, debut: str, fin: str, data: dict[str, Any], now: datetime) -> int:
+        self.execute(
+            """
+            INSERT INTO fiches(semaine, debut, fin, titre, contenu, resume_prof, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(semaine) DO UPDATE SET
+                titre = excluded.titre, contenu = excluded.contenu,
+                resume_prof = excluded.resume_prof, created_at = excluded.created_at
+            """,
+            (semaine, debut, fin, data["titre"], data["contenu"], data["resume_prof"], now.isoformat()),
+        )
+        return self.fiche_for_week(semaine)["id"]
 
     # --- sujets suggérés par le professeur ------------------------------------
 

@@ -108,3 +108,17 @@ async def test_refusal_raises():
     api = FakeAPI([sse([], stop_reason="refusal")])
     with pytest.raises(LLMError):
         await api.tutor().generate_assignment("", [], REGLAGES)
+
+
+async def test_progress_and_sheet_requests():
+    progression = {"notions": [], "points_forts": [], "difficultes": [], "prochaine_etape": "x"}
+    fiche = {"titre": "T", "contenu": "C", "resume_prof": "R"}
+    api = FakeAPI([sse([{"type": "text", "text": json.dumps(progression)}]),
+                   sse([{"type": "text", "text": json.dumps(fiche)}]),
+                   sse([{"type": "text", "text": json.dumps(ASSIGNMENT)}])])
+    tutor = api.tutor()
+    assert await tutor.update_progress(None, {"date": "2026-10-30"}, REGLAGES) == progression
+    assert api.requests[0]["output_config"]["format"]["schema"]["required"][0] == "notions"
+    assert await tutor.weekly_sheet("du 26 au 1", [], progression, REGLAGES) == fiche
+    await tutor.generate_assignment("", [], REGLAGES, progression={"prochaine_etape": "récurrence"})
+    assert "récurrence" in api.requests[2]["messages"][0]["content"]

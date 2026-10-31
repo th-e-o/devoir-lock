@@ -45,6 +45,42 @@ GRADE_SCHEMA = {
     "additionalProperties": False,
 }
 
+PROGRESS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "notions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "notion": {"type": "string"},
+                    "maitrise": {"type": "string", "enum": ["acquis", "en_cours", "fragile"]},
+                    "observations": {"type": "string"},
+                    "derniere_seance": {"type": "string", "description": "Date AAAA-MM-JJ"},
+                },
+                "required": ["notion", "maitrise", "observations", "derniere_seance"],
+                "additionalProperties": False,
+            },
+        },
+        "points_forts": {"type": "array", "items": {"type": "string"}},
+        "difficultes": {"type": "array", "items": {"type": "string"}},
+        "prochaine_etape": {"type": "string"},
+    },
+    "required": ["notions", "points_forts", "difficultes", "prochaine_etape"],
+    "additionalProperties": False,
+}
+
+FICHE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "titre": {"type": "string"},
+        "contenu": {"type": "string", "description": "Fiche en Markdown, formules en LaTeX entre $...$ ou $$...$$"},
+        "resume_prof": {"type": "string"},
+    },
+    "required": ["titre", "contenu", "resume_prof"],
+    "additionalProperties": False,
+}
+
 GENERATION_SYSTEM = """\
 Tu es professeur de mathématiques. Ton élève est en {niveau}. Chaque jour tu lui donnes un devoir \
 à rédiger à la main sur son cahier, prévu pour environ {minutes} minutes de travail. Son téléphone \
@@ -57,8 +93,11 @@ suis la progression usuelle de ce niveau.
 - Un seul exercice, en questions progressives : des questions d'application directe pour démarrer, \
 puis une question qui demande une petite initiative. Calibre la longueur sur {minutes} minutes et \
 indique ta propre estimation dans duree_estimee_min.
-- Exploite l'historique : reviens sur les notions mal maîtrisées, évite de répéter un exercice \
-déjà donné, varie les thèmes.
+- Construis un parcours à partir du carnet de progression de l'élève et de l'historique : \
+reviens à intervalles réguliers sur les notions fragiles, consolide celles en cours, et n'aborde \
+la notion suivante du programme que lorsque les précédentes tiennent. Ajuste la difficulté : un \
+cran au-dessus après des réussites nettes, un cran en dessous après des échecs. Évite de répéter \
+un exercice déjà donné.
 - L'énoncé est en Markdown ; toutes les formules sont en LaTeX entre $...$ (en ligne) ou $$...$$ \
 (centrées). Pas d'autres délimiteurs.
 - Le corrigé est complet et rigoureux : il sert au professeur et au correcteur automatique, l'élève \
@@ -87,6 +126,38 @@ par l'élève (écran photographié, corrigé imprimé, pages blanches).
 
 "retour_eleve" s'adresse à l'élève (tutoiement, concret, ce qu'il doit corriger s'il doit \
 recommencer). "resume_prof" résume la copie en deux ou trois phrases pour le professeur.
+"""
+
+PROGRESS_SYSTEM = """\
+Tu tiens le carnet de progression en mathématiques d'un élève ({niveau}). On te donne le carnet \
+actuel et le compte rendu d'une nouvelle séance (le devoir, la décision, l'analyse de sa copie). \
+Renvoie le carnet mis à jour.
+
+- Une entrée par notion, avec un nom stable et précis (« sommes télescopiques », pas « calculs »). \
+Conserve les notions déjà présentes ; ajoute celles travaillées dans la séance.
+- La maîtrise évolue avec prudence : une notion ne passe « acquis » qu'après plusieurs réussites \
+nettes, elle redevient « fragile » après une erreur de fond.
+- « observations » : ce qu'on a constaté concrètement (types d'erreurs, ce qui est réussi), en une \
+ou deux phrases.
+- « prochaine_etape » : ce que les prochains devoirs doivent travailler en priorité, en une ou deux \
+phrases.
+"""
+
+FICHE_SYSTEM = """\
+Tu es professeur de mathématiques. Ton élève est en {niveau}. Rédige sa fiche de révision de la \
+semaine, à partir des devoirs qu'il a faits et de l'analyse de ses copies.
+
+La fiche, en Markdown, formules en LaTeX entre $...$ ou $$...$$ uniquement :
+1. Les notions travaillées cette semaine.
+2. L'essentiel du cours sur ces notions : définitions, résultats et formules à connaître, énoncés \
+précisément.
+3. Les méthodes à retenir, chacune illustrée par un exemple court.
+4. Ses erreurs de la semaine et comment les éviter (appuie-toi sur les copies, sans le juger).
+5. Trois exercices courts de révision, avec le résultat attendu.
+
+Elle doit tenir en une ou deux pages et s'adresser directement à l'élève (tutoiement). \
+« resume_prof » résume la semaine pour le professeur en trois ou quatre phrases (travail fourni, \
+progrès, points à surveiller).
 """
 
 SUPERVISOR_SYSTEM = """\
@@ -158,6 +229,12 @@ SUPERVISOR_TOOLS = [
         },
     },
     {
+        "name": "voir_progression",
+        "description": "Renvoie le carnet de progression de l'élève (maîtrise par notion, difficultés, prochaine étape).",
+        "strict": True,
+        "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    },
+    {
         "name": "regler_niveau",
         "description": "Règle le niveau de l'élève et la durée visée des prochains devoirs.",
         "strict": True,
@@ -224,6 +301,7 @@ class ClaudeTutor:
         reglages: dict[str, Any],
         consignes: str | None = None,
         sujet: str | None = None,
+        progression: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         system = GENERATION_SYSTEM.format(
             niveau=reglages["niveau"], minutes=reglages["duree_min"], programme=programme.strip() or "(aucun)"
@@ -231,6 +309,8 @@ class ClaudeTutor:
         request = (
             "Historique des derniers devoirs (du plus récent au plus ancien) :\n"
             f"{json.dumps(history, ensure_ascii=False, indent=1) if history else '(aucun)'}\n\n"
+            "Carnet de progression de l'élève :\n"
+            f"{json.dumps(progression, ensure_ascii=False, indent=1) if progression else '(pas encore de suivi)'}\n\n"
             "Rédige le devoir du jour."
         )
         if sujet:
@@ -272,6 +352,37 @@ class ClaudeTutor:
             system=GRADING_SYSTEM.format(niveau=reglages["niveau"]),
             messages=[{"role": "user", "content": content}],
             output_config={"effort": "high", "format": {"type": "json_schema", "schema": GRADE_SCHEMA}},
+        )
+        return self._json_output(message)
+
+    async def update_progress(
+        self, progression: dict[str, Any] | None, seance: dict[str, Any], reglages: dict[str, Any]
+    ) -> dict[str, Any]:
+        request = (
+            "Carnet actuel :\n"
+            f"{json.dumps(progression, ensure_ascii=False, indent=1) if progression else '(vide)'}\n\n"
+            f"Nouvelle séance :\n{json.dumps(seance, ensure_ascii=False, indent=1)}"
+        )
+        message = await self._call(
+            system=PROGRESS_SYSTEM.format(niveau=reglages["niveau"]),
+            messages=[{"role": "user", "content": request}],
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": PROGRESS_SCHEMA}},
+        )
+        return self._json_output(message)
+
+    async def weekly_sheet(
+        self, semaine: str, seances: list[dict[str, Any]], progression: dict[str, Any] | None, reglages: dict[str, Any]
+    ) -> dict[str, Any]:
+        request = (
+            f"Semaine : {semaine}\n\n"
+            f"Devoirs de la semaine :\n{json.dumps(seances, ensure_ascii=False, indent=1)}\n\n"
+            "Carnet de progression :\n"
+            f"{json.dumps(progression, ensure_ascii=False, indent=1) if progression else '(pas encore de suivi)'}"
+        )
+        message = await self._call(
+            system=FICHE_SYSTEM.format(niveau=reglages["niveau"]),
+            messages=[{"role": "user", "content": request}],
+            output_config={"effort": "high", "format": {"type": "json_schema", "schema": FICHE_SCHEMA}},
         )
         return self._json_output(message)
 

@@ -51,6 +51,11 @@
   #message { position: fixed; left: 16px; right: 16px; bottom: 16px; max-width: 600px; margin: 0 auto; padding: 10px 14px;
              border-radius: 10px; background: var(--texte); color: var(--fond); display: none; }
   .cache { display: none; }
+  .maitrise { white-space: nowrap; }
+  .maitrise.acquis { color: #1f8a3b; } .maitrise.en_cours { color: #b7791f; } .maitrise.fragile { color: #c53030; }
+  @media (prefers-color-scheme: dark) {
+    .maitrise.acquis { color: #6fd38a; } .maitrise.en_cours { color: #f0c060; } .maitrise.fragile { color: #f08080; }
+  }
 </style>
 </head>
 <body>
@@ -70,6 +75,20 @@
     <input id="consignes" type="text" placeholder="ex. plus court, sur les sommes télescopiques">
     <button id="regenerer">Régénérer</button>
     <button id="debloquer" class="secondaire">Débloquer aujourd'hui sans copie</button>
+  </section>
+
+  <section>
+    <h2>Progression de l'élève</h2>
+    <div class="petit">Mis à jour par l'IA après chaque copie ; le générateur s'en sert pour construire le parcours.</div>
+    <div id="progression"></div>
+  </section>
+
+  <section>
+    <h2>Fiches de la semaine</h2>
+    <div class="petit">Générée automatiquement le dimanche à 18 h, visible par l'élève sur sa page.</div>
+    <div id="fiches"></div>
+    <div id="fiche" class="enonce"></div>
+    <button id="generer-fiche" class="secondaire">Générer la fiche de cette semaine maintenant</button>
   </section>
 
   <section>
@@ -241,6 +260,43 @@ function afficher(etat) {
     sujets.append(li);
   }
 
+  const prog = $("progression");
+  prog.innerHTML = "";
+  const p = etat.progression;
+  if (!p) {
+    prog.append(texte("p", "Pas encore de suivi : le carnet se remplit après chaque copie corrigée.", "petit"));
+  } else {
+    const LIBELLES = { acquis: "● acquis", en_cours: "● en cours", fragile: "● fragile" };
+    const table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th>Notion</th><th>Maîtrise</th><th>Observations</th><th>Vue le</th></tr></thead>";
+    const corps = document.createElement("tbody");
+    for (const n of p.notions) {
+      const tr = document.createElement("tr");
+      tr.append(texte("td", n.notion));
+      tr.append(texte("td", LIBELLES[n.maitrise] || n.maitrise, "maitrise " + n.maitrise));
+      tr.append(texte("td", n.observations));
+      tr.append(texte("td", n.derniere_seance));
+      corps.append(tr);
+    }
+    table.append(corps);
+    const scroll = document.createElement("div");
+    scroll.className = "table-scroll";
+    scroll.append(table);
+    prog.append(scroll);
+    if (p.points_forts.length) prog.append(texte("p", "Points forts : " + p.points_forts.join(" ; ")));
+    if (p.difficultes.length) prog.append(texte("p", "Difficultés : " + p.difficultes.join(" ; ")));
+    prog.append(texte("p", "Prochaine étape : " + p.prochaine_etape));
+  }
+
+  const fiches = $("fiches");
+  fiches.innerHTML = "";
+  if (!etat.fiches.length) fiches.append(texte("p", "Aucune fiche pour l'instant.", "petit"));
+  for (const f of etat.fiches) {
+    const b = texte("button", "📄 " + f.titre + " (semaine du " + new Date(f.debut + "T12:00").toLocaleDateString("fr-FR", { day: "numeric", month: "long" }) + ")", "secondaire");
+    b.addEventListener("click", () => ouvrirFiche(f.id));
+    fiches.append(b);
+  }
+
   const hist = $("historique");
   hist.innerHTML = "";
   for (const h of etat.historique) {
@@ -253,6 +309,14 @@ function afficher(etat) {
     tr.append(texte("td", h.note === null ? "–" : h.note + "/20"));
     hist.append(tr);
   }
+}
+
+async function ouvrirFiche(id) {
+  const f = await api("/api/fiches/" + id);
+  const zone = $("fiche");
+  zone.innerHTML = "";
+  zone.append(bloc(f.titre, markdownMaths(f.contenu), true));
+  zone.append(texte("p", "Résumé pour le professeur : " + f.resume_prof, "petit"));
 }
 
 async function charger() {
@@ -298,6 +362,15 @@ $("regenerer").addEventListener("click", (ev) => {
     $("consignes").value = "";
     message("Nouveau devoir généré");
   }).finally(() => (ev.target.textContent = "Régénérer"));
+});
+
+$("generer-fiche").addEventListener("click", (ev) => {
+  ev.target.textContent = "Rédaction… (1 à 2 min)";
+  action(ev.target, async () => {
+    const f = await api("/api/prof/fiche", "POST");
+    message("Fiche générée");
+    await ouvrirFiche(f.id);
+  }).finally(() => (ev.target.textContent = "Générer la fiche de cette semaine maintenant"));
 });
 
 $("debloquer").addEventListener("click", (ev) => {
