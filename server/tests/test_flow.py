@@ -336,6 +336,8 @@ async def test_shortcut_status_and_student_page(env):
     assert page.status_code == 200 and "Devoir du jour" in page.text
     assert client.get("/static/katex.min.js").status_code == 200
     assert client.get("/manifest.webmanifest").json()["start_url"] == "/eleve"
+    assert client.get("/manifest.webmanifest", params={"k": "faux"}).json()["start_url"] == "/eleve"
+    assert client.get("/manifest.webmanifest", params={"k": "secret"}).json()["start_url"] == "/eleve#k=secret"
 
 
 async def test_default_programme_and_settings(env):

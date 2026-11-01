@@ -250,18 +250,24 @@ def create_app(service: Service | None = None, bot: TelegramBot | None = None, b
         return FileResponse(STATIC_DIR / "eleve.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/manifest.webmanifest")
-    def manifest() -> JSONResponse:
+    def manifest(k: str | None = None, svc: Service = Depends(get_service)) -> JSONResponse:
+        # Avec le bon code, l'icône de l'écran d'accueil s'ouvre directement sur les devoirs :
+        # sur iPhone, l'app ajoutée à l'écran d'accueil ne partage pas le stockage de Safari.
+        start_url = "/eleve"
+        if k and hmac.compare_digest(k.encode(), svc.s.device_token.encode()):
+            start_url = f"/eleve#k={k}"
         return JSONResponse(
             {
                 "name": "Devoir du jour",
                 "short_name": "Devoir",
-                "start_url": "/eleve",
+                "start_url": start_url,
                 "display": "standalone",
                 "background_color": "#ffffff",
                 "theme_color": "#1e5aa8",
                 "icons": [{"src": "/static/icon.png", "sizes": "512x512", "type": "image/png"}],
             },
             media_type="application/manifest+json",
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.get("/api/statut", response_class=PlainTextResponse)

@@ -105,6 +105,12 @@ function lireCode() {
 }
 let code = lireCode();
 
+// Manifeste avec le code : l'icône ajoutée à l'écran d'accueil s'ouvrira directement sur les devoirs.
+function majManifeste() {
+  if (code) document.querySelector('link[rel="manifest"]').href = "/manifest.webmanifest?k=" + encodeURIComponent(code);
+}
+majManifeste();
+
 const $ = (id) => document.getElementById(id);
 
 function afficher(id, visible) { $(id).classList.toggle("cache", !visible); }
@@ -305,6 +311,7 @@ $("envoyer").addEventListener("click", async () => {
 $("valider-code").addEventListener("click", () => {
   code = $("code").value.trim();
   try { localStorage.setItem("code", code); } catch (e) {}
+  majManifeste();
   afficher("connexion", false);
   afficher("principal", true);
   synchroniser();
