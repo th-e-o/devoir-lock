@@ -53,7 +53,7 @@ class FakeAPI:
 
 REGLAGES = {"niveau": "début de MPSI", "duree_min": 30}
 
-ASSIGNMENT = {"titre": "T", "notions": ["n"], "enonce": "E", "corrige": "C",
+ASSIGNMENT = {"titre": "T", "notions": ["n"], "enonce": "E", "cours": "Rappel", "corrige": "C",
               "criteres_validation": ["c"], "duree_estimee_min": 40}
 
 
@@ -122,3 +122,18 @@ async def test_progress_and_sheet_requests():
     assert await tutor.weekly_sheet("du 26 au 1", [], progression, REGLAGES) == fiche
     await tutor.generate_assignment("", [], REGLAGES, progression={"prochaine_etape": "récurrence"})
     assert "récurrence" in api.requests[2]["messages"][0]["content"]
+
+
+async def test_plan_request_and_daily_plan_in_generation():
+    plan = {"strategie": "s", "realisme": "r", "phases": [], "semaines": [], "jalons": []}
+    api = FakeAPI([sse([{"type": "text", "text": json.dumps(plan)}]),
+                   sse([{"type": "text", "text": json.dumps(ASSIGNMENT)}])])
+    tutor = api.tutor()
+    objectif = {"depart": "début de MPSI", "objectif": "intégrer l'X", "echeance": "2028-04-15", "minutes_max": 30}
+    assert await tutor.make_plan(objectif, "2026-11-01", "", None, [], None) == plan
+    body = api.requests[0]
+    assert "intégrer l'X" in body["messages"][0]["content"] and "X-ENS" in body["system"]
+    assert body["output_config"]["format"]["schema"]["required"][0] == "strategie"
+    await tutor.generate_assignment("", [], REGLAGES, plan_du_jour={"semaine": {"theme": "Racines n-ièmes"}})
+    assert "Racines n-ièmes" in api.requests[1]["system"]
+    assert "cours" in api.requests[1]["output_config"]["format"]["schema"]["required"]

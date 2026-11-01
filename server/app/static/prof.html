@@ -52,6 +52,14 @@
              border-radius: 10px; background: var(--texte); color: var(--fond); display: none; }
   .cache { display: none; }
   .maitrise, .date { white-space: nowrap; }
+  .realisme { border-left: 4px solid var(--bleu); background: var(--fond); border-radius: 8px; padding: 10px 12px; }
+  .difficulte { letter-spacing: 2px; white-space: nowrap; color: var(--bleu); }
+  .phases { list-style: none; padding: 0; margin: 0; }
+  .phases li { padding: 8px 0; border-bottom: 1px solid var(--bord); }
+  .phases li.en-cours { font-weight: 600; }
+  .phases li .petit { font-weight: 400; }
+  input[type=date] { padding: 8px 10px; font: inherit; color: var(--texte); background: var(--fond);
+                     border: 1px solid var(--bord); border-radius: 8px; }
   .maitrise.acquis { color: #1f8a3b; } .maitrise.en_cours { color: #b7791f; } .maitrise.fragile { color: #c53030; }
   @media (prefers-color-scheme: dark) {
     .maitrise.acquis { color: #6fd38a; } .maitrise.en_cours { color: #f0c060; } .maitrise.fragile { color: #f08080; }
@@ -67,6 +75,29 @@
 </div>
 
 <div id="contenu" class="cache">
+  <section>
+    <h2>Objectif</h2>
+    <div class="petit">Claude en déduit un plan jusqu'à l'échéance, révisé chaque dimanche à partir du carnet de progression. Les devoirs du jour suivent la semaine en cours.</div>
+    <label for="obj-depart">Point de départ</label>
+    <textarea id="obj-depart" placeholder="ex. début de MPSI, bonnes bases d'analyse de terminale, peu d'entraînement à la rédaction"></textarea>
+    <label for="obj-objectif">Objectif</label>
+    <input id="obj-objectif" type="text" placeholder="ex. intégrer l'X (concours X-ENS, filière MP)">
+    <div class="ligne">
+      <div style="flex: 0 1 200px">
+        <label for="obj-echeance">Échéance</label>
+        <input id="obj-echeance" type="date">
+      </div>
+      <div style="flex: 0 1 200px">
+        <label for="obj-minutes">Temps disponible par jour (min)</label>
+        <input id="obj-minutes" type="number" min="10" max="180" step="5" value="30">
+      </div>
+    </div>
+    <button id="enregistrer-objectif">Enregistrer et calculer le plan</button>
+    <button id="recalculer-plan" class="secondaire">Recalculer le plan</button>
+    <button id="supprimer-objectif" class="secondaire">Retirer l'objectif</button>
+    <div id="plan"></div>
+  </section>
+
   <section>
     <h2>Aujourd'hui <span id="date" class="petit"></span> <span id="statut" class="pastille"></span></h2>
     <div id="devoir"></div>
@@ -92,7 +123,7 @@
   </section>
 
   <section>
-    <h2>Niveau et durée</h2>
+    <h2>Niveau et durée (sans objectif)</h2>
     <div class="ligne">
       <div>
         <label for="niveau">Niveau de l'élève</label>
@@ -223,6 +254,7 @@ function afficher(etat) {
     devoir.append(texte("h3", etat.devoir.titre));
     devoir.append(texte("div", "Notions : " + etat.devoir.notions.join(", ") + " · durée estimée " + etat.devoir.duree_min + " min", "petit"));
     devoir.append(bloc("Énoncé", markdownMaths(etat.devoir.enonce), true));
+    if (etat.devoir.cours) devoir.append(bloc("Cours (montré à l'élève)", markdownMaths(etat.devoir.cours), false));
     devoir.append(bloc("Corrigé", markdownMaths(etat.devoir.corrige), false));
   } else {
     devoir.append(texte("p", "Le devoir du jour n'est pas encore généré.", "petit"));
@@ -259,6 +291,8 @@ function afficher(etat) {
     li.append(b);
     sujets.append(li);
   }
+
+  rendrePlan(etat);
 
   const prog = $("progression");
   prog.innerHTML = "";
@@ -311,6 +345,77 @@ function afficher(etat) {
   }
 }
 
+function etoiles(n) {
+  const v = Math.max(1, Math.min(5, n));
+  return "●".repeat(v) + "○".repeat(5 - v);
+}
+
+function rendrePlan(etat) {
+  const o = etat.objectif;
+  if (o && document.activeElement?.id?.startsWith("obj-") !== true) {
+    $("obj-depart").value = o.depart;
+    $("obj-objectif").value = o.objectif;
+    $("obj-echeance").value = o.echeance;
+    $("obj-minutes").value = o.minutes_max;
+  }
+  $("recalculer-plan").classList.toggle("cache", !o);
+  $("supprimer-objectif").classList.toggle("cache", !o);
+  const zone = $("plan");
+  zone.innerHTML = "";
+  const p = etat.plan;
+  if (!o) {
+    zone.append(texte("p", "Aucun objectif : les devoirs suivent le programme, le niveau et la durée réglés plus bas.", "petit"));
+    return;
+  }
+  if (!p) {
+    zone.append(texte("p", "Plan en cours de calcul…", "petit"));
+    return;
+  }
+  const jour = etat.plan_du_jour || {};
+  zone.append(texte("h3", "Plan · J-" + jour.jours_restants + " avant l'échéance"));
+  zone.append(texte("div", "Réalisme : " + p.realisme, "realisme"));
+  zone.append(texte("p", p.strategie));
+
+  zone.append(texte("h3", "Prochaines semaines"));
+  const table = document.createElement("table");
+  table.innerHTML = "<thead><tr><th>Semaine du</th><th>Thème et objectif</th><th>Difficulté</th><th>Min/jour</th></tr></thead>";
+  const corps = document.createElement("tbody");
+  for (const w of p.semaines) {
+    const tr = document.createElement("tr");
+    tr.append(texte("td", w.debut, "date"));
+    const td = texte("td", w.theme);
+    td.append(texte("div", w.objectif + " · " + w.notions.join(", "), "petit"));
+    tr.append(td);
+    tr.append(texte("td", etoiles(w.difficulte), "difficulte"));
+    tr.append(texte("td", String(w.minutes_par_jour)));
+    if (jour.semaine && jour.semaine.debut === w.debut) tr.style.fontWeight = "600";
+    corps.append(tr);
+  }
+  table.append(corps);
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll";
+  scroll.append(table);
+  zone.append(scroll);
+
+  zone.append(texte("h3", "Phases jusqu'à l'échéance"));
+  const phases = document.createElement("ul");
+  phases.className = "phases";
+  for (const ph of p.phases) {
+    const li = document.createElement("li");
+    if (jour.phase && jour.phase.debut === ph.debut) li.className = "en-cours";
+    li.append(texte("div", ph.titre + "  " + etoiles(ph.difficulte)));
+    li.append(texte("div", ph.debut + " → " + ph.fin + " · " + ph.objectif + " · " + ph.chapitres.join(", "), "petit"));
+    phases.append(li);
+  }
+  zone.append(phases);
+
+  zone.append(texte("h3", "Jalons"));
+  const jalons = document.createElement("ul");
+  for (const j of p.jalons) jalons.append(texte("li", j.date + " · " + j.intitule + " : " + j.critere));
+  zone.append(jalons);
+  zone.append(texte("p", "Plan calculé le " + p.genere_le.slice(0, 10) + ". Difficulté : ● application directe → ●●●●● niveau X-ENS.", "petit"));
+}
+
 async function ouvrirFiche(id) {
   const f = await api("/api/fiches/" + id);
   const zone = $("fiche");
@@ -336,6 +441,33 @@ async function action(bouton, fn) {
     bouton.disabled = false;
   }
 }
+
+$("enregistrer-objectif").addEventListener("click", (ev) => {
+  ev.target.textContent = "Calcul du plan… (1 à 2 min)";
+  action(ev.target, async () => {
+    await api("/api/prof/objectif", "PUT", {
+      depart: $("obj-depart").value, objectif: $("obj-objectif").value,
+      echeance: $("obj-echeance").value, minutes_max: Number($("obj-minutes").value),
+    });
+    message("Objectif enregistré, plan calculé");
+  }).finally(() => (ev.target.textContent = "Enregistrer et calculer le plan"));
+});
+
+$("recalculer-plan").addEventListener("click", (ev) => {
+  ev.target.textContent = "Calcul… (1 à 2 min)";
+  action(ev.target, async () => {
+    await api("/api/prof/plan", "POST");
+    message("Plan recalculé");
+  }).finally(() => (ev.target.textContent = "Recalculer le plan"));
+});
+
+$("supprimer-objectif").addEventListener("click", (ev) => {
+  if (!confirm("Retirer l'objectif et son plan ? Les devoirs suivront de nouveau le programme seul.")) return;
+  action(ev.target, async () => {
+    await api("/api/prof/objectif", "DELETE");
+    message("Objectif retiré");
+  });
+});
 
 $("enregistrer-reglages").addEventListener("click", (ev) => action(ev.target, async () => {
   await api("/api/prof/reglages", "PUT", { niveau: $("niveau").value, duree_min: Number($("duree").value) });

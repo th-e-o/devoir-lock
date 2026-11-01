@@ -25,10 +25,11 @@ ASSIGNMENT_SCHEMA = {
             "description": "Énoncé en Markdown, formules en LaTeX entre $...$ ou $$...$$",
         },
         "corrige": {"type": "string", "description": "Corrigé détaillé, Markdown + LaTeX"},
+        "cours": {"type": "string", "description": "Rappel de cours pour l'élève, Markdown + LaTeX"},
         "criteres_validation": {"type": "array", "items": {"type": "string"}},
         "duree_estimee_min": {"type": "integer"},
     },
-    "required": ["titre", "notions", "enonce", "corrige", "criteres_validation", "duree_estimee_min"],
+    "required": ["titre", "notions", "enonce", "cours", "corrige", "criteres_validation", "duree_estimee_min"],
     "additionalProperties": False,
 }
 
@@ -81,6 +82,91 @@ FICHE_SCHEMA = {
     "additionalProperties": False,
 }
 
+PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "strategie": {"type": "string"},
+        "realisme": {"type": "string"},
+        "phases": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "titre": {"type": "string"},
+                    "debut": {"type": "string", "description": "AAAA-MM-JJ"},
+                    "fin": {"type": "string", "description": "AAAA-MM-JJ"},
+                    "objectif": {"type": "string"},
+                    "chapitres": {"type": "array", "items": {"type": "string"}},
+                    "difficulte": {"type": "integer", "description": "1 à 5"},
+                },
+                "required": ["titre", "debut", "fin", "objectif", "chapitres", "difficulte"],
+                "additionalProperties": False,
+            },
+        },
+        "semaines": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "debut": {"type": "string", "description": "Lundi de la semaine, AAAA-MM-JJ"},
+                    "theme": {"type": "string"},
+                    "notions": {"type": "array", "items": {"type": "string"}},
+                    "difficulte": {"type": "integer", "description": "1 à 5"},
+                    "minutes_par_jour": {"type": "integer"},
+                    "objectif": {"type": "string"},
+                },
+                "required": ["debut", "theme", "notions", "difficulte", "minutes_par_jour", "objectif"],
+                "additionalProperties": False,
+            },
+        },
+        "jalons": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "AAAA-MM-JJ"},
+                    "intitule": {"type": "string"},
+                    "critere": {"type": "string"},
+                },
+                "required": ["date", "intitule", "critere"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["strategie", "realisme", "phases", "semaines", "jalons"],
+    "additionalProperties": False,
+}
+
+DIFFICULTE = """\
+Échelle de difficulté : 1 = application directe du cours ; 2 = exercice guidé classique ; \
+3 = exercice standard de prépa ; 4 = exercice de concours (niveau Mines-Ponts, Centrale) ; \
+5 = exercice de niveau X-ENS."""
+
+PLAN_SYSTEM = """\
+Tu es professeur de mathématiques et tu construis le plan de travail d'un élève vers un objectif \
+précis. Chaque jour, l'élève fait un devoir rédigé à la main, dont la durée est fixée par ton plan \
+(sans dépasser le temps dont il dispose). Les devoirs du jour sont générés à partir de la semaine \
+en cours de ton plan.
+
+Tu reçois : le point de départ, l'objectif, l'échéance, le temps disponible par jour, le programme \
+et les consignes du professeur, le carnet de progression, l'historique récent et, s'il existe, le \
+plan précédent (tu le révises alors à partir de ce qui s'est passé).
+
+Produis :
+- « strategie » : la logique d'ensemble du parcours, en quelques phrases.
+- « realisme » : une évaluation franche. Si l'objectif est hors d'atteinte avec ce temps quotidien \
+ou cette échéance, dis-le clairement et indique ce qu'il faudrait (temps, échéance, objectif \
+intermédiaire). Ce travail quotidien complète les cours et le travail de l'élève, il ne les remplace pas.
+- « phases » : des phases consécutives qui couvrent toute la période d'aujourd'hui à l'échéance, \
+avec les chapitres et la difficulté visée. Suis l'ordre du programme de la classe quand il est connu.
+- « semaines » : les 6 prochaines semaines en détail, chacune commençant un lundi, la première \
+étant la semaine en cours. Monte la difficulté progressivement, reviens sur les notions fragiles \
+du carnet, et garde minutes_par_jour au plus égal au temps disponible.
+- « jalons » : 3 à 8 étapes mesurables jusqu'à l'échéance (ce que l'élève doit savoir faire, à quelle date).
+
+{difficulte}
+"""
+
 GENERATION_SYSTEM = """\
 Tu es professeur de mathématiques. Ton élève est en {niveau}. Chaque jour tu lui donnes un devoir \
 à rédiger à la main sur son cahier, prévu pour environ {minutes} minutes de travail. Son téléphone \
@@ -100,6 +186,9 @@ cran au-dessus après des réussites nettes, un cran en dessous après des éche
 un exercice déjà donné.
 - L'énoncé est en Markdown ; toutes les formules sont en LaTeX entre $...$ (en ligne) ou $$...$$ \
 (centrées). Pas d'autres délimiteurs.
+- Le cours accompagne l'énoncé et l'élève le lit : le rappel de cours dont il a besoin pour cet \
+exercice (définitions, énoncés précis des résultats utiles, méthode type illustrée par un court \
+exemple différent de l'exercice). Il ne donne ni la solution ni l'idée clé propre à l'exercice.
 - Le corrigé est complet et rigoureux : il sert au professeur et au correcteur automatique, l'élève \
 ne le voit pas.
 - Les critères de validation disent ce qui doit figurer sur la copie pour que le travail soit \
@@ -110,6 +199,17 @@ Programme et consignes du professeur :
 {programme}
 </programme>
 """
+
+PLAN_DU_JOUR = """\
+L'élève suit un plan vers un objectif. Le devoir du jour sert l'objectif de la semaine en cours : \
+reste dans son thème et ses notions, à la difficulté indiquée, en variant les exercices d'un jour \
+à l'autre (voir l'historique).
+
+{difficulte}
+
+<plan_du_jour>
+{plan}
+</plan_du_jour>"""
 
 GRADING_SYSTEM = """\
 Tu corriges la copie manuscrite d'un élève ({niveau}), photographiée page par page. Ta décision \
@@ -165,8 +265,10 @@ Tu assistes le professeur de mathématiques d'un élève ({niveau}) qui reçoit 
 d'environ {minutes} minutes généré par IA ; son téléphone reste bloqué tant que le devoir n'est \
 pas validé. Le professeur te parle depuis Telegram.
 
-Ton rôle : l'aider à piloter les devoirs. Tu peux consulter et réécrire le programme (progression, \
-chapitres en cours, difficultés, consignes de style), régler le niveau et la durée visée, ajouter \
+Ton rôle : l'aider à piloter les devoirs. Tu peux consulter et modifier l'objectif de l'élève \
+(point de départ, objectif, échéance, temps par jour) et le plan qui en découle, consulter et \
+réécrire le programme (progression, chapitres en cours, difficultés, consignes de style), régler \
+le niveau et la durée visée utilisés quand il n'y a pas d'objectif, ajouter \
 des sujets suggérés pour les prochains devoirs, consulter l'historique des devoirs et leurs \
 résultats, et régénérer le devoir du jour avec des consignes.
 
@@ -227,6 +329,37 @@ SUPERVISOR_TOOLS = [
             "required": ["consignes"],
             "additionalProperties": False,
         },
+    },
+    {
+        "name": "voir_plan",
+        "description": "Renvoie l'objectif de l'élève et le plan en cours (phases, semaines, jalons, réalisme).",
+        "strict": True,
+        "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    },
+    {
+        "name": "definir_objectif",
+        "description": (
+            "Définit ou modifie l'objectif de l'élève, puis recalcule le plan (1 à 2 minutes). "
+            "Reprends les valeurs actuelles (voir_plan) pour les champs que le professeur ne change pas."
+        ),
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "depart": {"type": "string", "description": "Point de départ : niveau actuel, forces, faiblesses"},
+                "objectif": {"type": "string", "description": "Ex. « intégrer l'X (concours X-ENS, filière MP) »"},
+                "echeance": {"type": "string", "description": "Date AAAA-MM-JJ"},
+                "minutes_max": {"type": "integer", "description": "Temps disponible par jour, en minutes (10 à 180)"},
+            },
+            "required": ["depart", "objectif", "echeance", "minutes_max"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "recalculer_plan",
+        "description": "Recalcule le plan à partir de l'objectif, du carnet de progression et des consignes (1 à 2 minutes).",
+        "strict": True,
+        "input_schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
     },
     {
         "name": "voir_progression",
@@ -302,10 +435,15 @@ class ClaudeTutor:
         consignes: str | None = None,
         sujet: str | None = None,
         progression: dict[str, Any] | None = None,
+        plan_du_jour: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         system = GENERATION_SYSTEM.format(
             niveau=reglages["niveau"], minutes=reglages["duree_min"], programme=programme.strip() or "(aucun)"
         )
+        if plan_du_jour:
+            system += "\n" + PLAN_DU_JOUR.format(
+                difficulte=DIFFICULTE, plan=json.dumps(plan_du_jour, ensure_ascii=False, indent=1)
+            )
         request = (
             "Historique des derniers devoirs (du plus récent au plus ancien) :\n"
             f"{json.dumps(history, ensure_ascii=False, indent=1) if history else '(aucun)'}\n\n"
@@ -352,6 +490,33 @@ class ClaudeTutor:
             system=GRADING_SYSTEM.format(niveau=reglages["niveau"]),
             messages=[{"role": "user", "content": content}],
             output_config={"effort": "high", "format": {"type": "json_schema", "schema": GRADE_SCHEMA}},
+        )
+        return self._json_output(message)
+
+    async def make_plan(
+        self,
+        objectif: dict[str, Any],
+        aujourd_hui: str,
+        programme: str,
+        progression: dict[str, Any] | None,
+        historique: list[dict[str, Any]],
+        plan_precedent: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        request = (
+            f"Aujourd'hui : {aujourd_hui}\n\n"
+            f"Objectif :\n{json.dumps(objectif, ensure_ascii=False, indent=1)}\n\n"
+            f"Programme et consignes du professeur :\n{programme.strip() or '(aucun)'}\n\n"
+            "Carnet de progression :\n"
+            f"{json.dumps(progression, ensure_ascii=False, indent=1) if progression else '(pas encore de suivi)'}\n\n"
+            "Historique récent (du plus récent au plus ancien) :\n"
+            f"{json.dumps(historique, ensure_ascii=False, indent=1) if historique else '(aucun)'}\n\n"
+            "Plan précédent :\n"
+            f"{json.dumps(plan_precedent, ensure_ascii=False, indent=1) if plan_precedent else '(premier plan)'}"
+        )
+        message = await self._call(
+            system=PLAN_SYSTEM.format(difficulte=DIFFICULTE),
+            messages=[{"role": "user", "content": request}],
+            output_config={"effort": "high", "format": {"type": "json_schema", "schema": PLAN_SCHEMA}},
         )
         return self._json_output(message)
 

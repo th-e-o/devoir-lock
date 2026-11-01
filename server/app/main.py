@@ -179,6 +179,34 @@ def create_app(service: Service | None = None, bot: TelegramBot | None = None, b
             raise HTTPException(status_code=400, detail=str(e)) from e
         return svc.reglages()
 
+    @app.put("/api/prof/objectif")
+    async def prof_goal(
+        depart: Annotated[str, Body()],
+        objectif: Annotated[str, Body()],
+        echeance: Annotated[str, Body()],
+        minutes_max: Annotated[int, Body()],
+        svc: Service = Depends(require_prof),
+    ) -> dict:
+        try:
+            svc.set_objectif(depart, objectif, echeance, minutes_max)
+            await svc.replan()
+        except (ValueError, LLMError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return svc.prof_overview()
+
+    @app.delete("/api/prof/objectif")
+    async def prof_clear_goal(svc: Service = Depends(require_prof)) -> dict:
+        svc.clear_objectif()
+        return svc.prof_overview()
+
+    @app.post("/api/prof/plan")
+    async def prof_replan(svc: Service = Depends(require_prof)) -> dict:
+        try:
+            await svc.replan()
+        except (ValueError, LLMError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return svc.prof_overview()
+
     @app.put("/api/prof/programme")
     async def prof_programme(texte: Annotated[str, Body(embed=True)], svc: Service = Depends(require_prof)) -> dict:
         svc.db.set_programme(texte.strip(), svc.now())

@@ -19,6 +19,13 @@ et l'app **Raccourcis** intégrée à l'iPhone.
   les sujets suggérés par le professeur et l'historique (il revient sur les notions ratées).
   Par défaut, la progression est celle du début de sup (MPSI / MP2I). Le corrigé n'est jamais
   montré à l'élève.
+- **Objectif et plan** : le professeur indique un point de départ, un objectif (« intégrer l'X »), une
+  échéance et le temps disponible par jour. Claude en déduit un plan : stratégie, évaluation franche du
+  réalisme, phases jusqu'à l'échéance, détail des six prochaines semaines (thème, notions, difficulté,
+  minutes par jour) et jalons. Le devoir du jour suit la semaine en cours ; le plan est révisé chaque
+  dimanche à partir du carnet de progression. Sans objectif, les devoirs suivent simplement le programme.
+- **Cours** : chaque devoir est accompagné d'un rappel de cours (définitions, résultats, méthode avec un
+  exemple), dans un onglet de la page élève, sans donner la solution.
 - **Carnet de progression** : après chaque copie (corrigée par le professeur ou par l'IA), l'IA
   analyse le travail et met à jour la maîtrise de l'élève notion par notion (acquis, en cours,
   fragile), ses points forts, ses difficultés récurrentes et la prochaine étape. Le générateur s'en
@@ -131,6 +138,7 @@ Sur l'iPhone de l'élève, dans **Réglages > Temps d'écran** :
 | `/prof` | lien vers l'interface professeur (`/prof nouveau` change le lien) |
 | `/sujet <texte>` | suggère un sujet pour un prochain devoir (`/sujet` seul : la liste) |
 | `/programme` | affiche le niveau, la durée visée et le programme |
+| `/objectif` | objectif de l'élève et plan en cours |
 | `/progression` | carnet de progression de l'élève |
 | `/fiche` | génère maintenant la fiche de la semaine |
 | `/nouvelle` | repart d'une conversation vierge avec l'IA |
@@ -154,5 +162,5 @@ de tête, mais il n'est pas inviolable :
 - Apple, Telegram, Tailscale et Cloudflare : gratuits.
 - Serveur : une machine déjà allumée, ou un Raspberry Pi (environ 60 €, une fois).
 - API Claude : `claude-opus-5-5` par défaut (`CLAUDE_MODEL`). Chaque jour : une génération, une analyse de
-  la copie et une mise à jour du carnet, plus une fiche par semaine. Comptez de l'ordre de 0,30 à 0,80 $
+  la copie et une mise à jour du carnet, plus une fiche et une révision du plan par semaine. Comptez de l'ordre de 0,30 à 0,80 $
   par jour (estimation, à vérifier dans la console Anthropic). Avec `claude-sonnet-5-5`, c'est environ deux fois moins cher.

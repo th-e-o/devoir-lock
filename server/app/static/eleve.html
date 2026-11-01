@@ -36,6 +36,13 @@
   .vignettes { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
   .vignettes img { width: 64px; height: 84px; object-fit: cover; border-radius: 6px; }
   .cache { display: none; }
+  .objectif { border: 1px solid var(--carte); border-left: 4px solid var(--bleu); border-radius: 10px;
+              padding: 9px 12px; margin-bottom: 12px; font-size: 0.95em; }
+  .objectif b { display: block; }
+  .onglets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; background: var(--carte);
+             border-radius: 10px; padding: 4px; margin-bottom: 12px; position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; }
+  .onglets button { margin: 0; padding: 9px 4px; background: transparent; color: var(--texte); font-weight: 600; }
+  .onglets button[aria-selected="true"] { background: var(--fond); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
   .fiche-lien { display: block; width: 100%; text-align: left; background: var(--carte); color: var(--texte);
                 font-weight: 500; margin: 6px 0; }
 </style>
@@ -51,6 +58,13 @@
 
 <div id="principal" class="cache">
   <div id="statut" class="statut">Connexion au serveur…</div>
+  <div id="objectif" class="objectif cache"></div>
+  <div class="onglets" role="tablist">
+    <button id="onglet-exercice" role="tab" aria-selected="true" data-panneau="panneau-exercice">Exercice</button>
+    <button id="onglet-cours" role="tab" aria-selected="false" data-panneau="panneau-cours">Cours</button>
+    <button id="onglet-fiches" role="tab" aria-selected="false" data-panneau="panneau-fiches">Fiches</button>
+  </div>
+  <div id="panneau-exercice" role="tabpanel">
   <div id="devoir" class="carte cache"></div>
   <div id="envoi" class="cache">
     <div class="vignettes" id="vignettes"></div>
@@ -60,8 +74,12 @@
     <button id="envoyer" disabled>Envoyer</button>
     <button id="effacer" class="secondaire" disabled>Effacer les pages</button>
   </div>
-  <div id="bloc-fiches" class="cache">
-    <h2>Fiches de révision</h2>
+  </div>
+  <div id="panneau-cours" role="tabpanel" class="cache">
+    <div id="cours" class="carte"><p class="petit">Le rappel de cours apparaîtra avec le devoir du jour.</p></div>
+  </div>
+  <div id="panneau-fiches" role="tabpanel" class="cache">
+    <p id="aucune-fiche" class="petit">Pas encore de fiche : la fiche de révision de la semaine arrive le dimanche soir.</p>
     <div id="liste-fiches"></div>
     <div id="fiche" class="carte cache"></div>
   </div>
@@ -123,7 +141,7 @@ async function chargerFiches() {
   const cle = JSON.stringify(fiches);
   if (cle === fichesConnues) return;
   fichesConnues = cle;
-  afficher("bloc-fiches", fiches.length > 0);
+  afficher("aucune-fiche", fiches.length === 0);
   const liste = $("liste-fiches");
   liste.innerHTML = "";
   for (const f of fiches) {
@@ -137,10 +155,51 @@ async function chargerFiches() {
       $("fiche").innerHTML = markdownMaths(fiche.contenu);
       $("fiche").prepend(titre);
       afficher("fiche", true);
-      $("fiche").scrollIntoView({ behavior: "smooth" });
+      $("fiche").scrollIntoView({ behavior: "smooth", block: "start" });
     });
     liste.append(b);
   }
+}
+
+function ouvrirOnglet(bouton) {
+  for (const b of document.querySelectorAll(".onglets button")) {
+    const actif = b === bouton;
+    b.setAttribute("aria-selected", String(actif));
+    afficher(b.dataset.panneau, actif);
+  }
+  try { localStorage.setItem("onglet", bouton.id); } catch (e) {}
+}
+for (const b of document.querySelectorAll(".onglets button")) b.addEventListener("click", () => ouvrirOnglet(b));
+try {
+  const memo = localStorage.getItem("onglet");
+  if (memo && $(memo)) ouvrirOnglet($(memo));
+} catch (e) {}
+
+function rendreObjectif(o) {
+  afficher("objectif", !!o);
+  if (!o) return;
+  const zone = $("objectif");
+  zone.innerHTML = "";
+  const titre = document.createElement("b");
+  titre.textContent = "🎯 " + o.objectif + " · J-" + o.jours_restants;
+  zone.append(titre);
+  if (o.semaine) {
+    const t = document.createElement("span");
+    t.textContent = "Cette semaine : " + o.semaine.theme + ". " + o.semaine.objectif;
+    zone.append(t);
+  }
+}
+
+function rendreCours(etat) {
+  const zone = $("cours");
+  if (!etat.cours) {
+    zone.innerHTML = '<p class="petit">Pas de rappel de cours pour ce devoir.</p>';
+    return;
+  }
+  const titre = document.createElement("h2");
+  titre.textContent = "Cours : " + etat.titre;
+  zone.innerHTML = markdownMaths(etat.cours);
+  zone.prepend(titre);
 }
 
 function rendreEnonce(etat) {
@@ -171,8 +230,10 @@ async function synchroniser() {
     $("statut").textContent = messageStatut(etat);
     $("statut").classList.toggle("ok", etat.status === "valide");
     afficher("envoi", etat.status === "a_faire" || etat.status === "en_correction");
+    rendreObjectif(etat.objectif);
     if (etat.enonce && etat.enonce !== dernierEnonce) {
       rendreEnonce(etat);
+      rendreCours(etat);
       dernierEnonce = etat.enonce;
     }
     afficher("devoir", !!etat.enonce);

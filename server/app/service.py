@@ -27,6 +27,8 @@ GRADING_RETRY = timedelta(minutes=5)
 TRACKING_RETRY = timedelta(minutes=10)
 FICHE_RETRY = timedelta(minutes=30)
 FICHE_WEEKDAY, FICHE_HOUR = 6, 18  # dimanche 18 h
+PLAN_WEEKDAY, PLAN_HOUR = 6, 19  # révision hebdomadaire du plan : dimanche 19 h
+PLAN_RETRY = timedelta(minutes=30)
 
 DEFAULT_NIVEAU = "début de première année de classe préparatoire scientifique (MPSI / MP2I)"
 DEFAULT_DUREE_MIN = 30
@@ -64,6 +66,7 @@ Commandes :
 /programme - programme actuel
 /nouvelle - repartir d'une conversation vierge avec l'IA
 /sujet <texte> - suggérer un sujet pour un prochain devoir
+/objectif - objectif de l'élève et plan en cours
 /progression - carnet de progression de l'élève
 /fiche - générer maintenant la fiche de la semaine
 Tout autre message est envoyé à l'IA qui gère le programme (ex. « on passe aux nombres \
@@ -79,6 +82,17 @@ class Tutor(Protocol):
         consignes: str | None = None,
         sujet: str | None = None,
         progression: dict[str, Any] | None = None,
+        plan_du_jour: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def make_plan(
+        self,
+        objectif: dict[str, Any],
+        aujourd_hui: str,
+        programme: str,
+        progression: dict[str, Any] | None,
+        historique: list[dict[str, Any]],
+        plan_precedent: dict[str, Any] | None,
     ) -> dict[str, Any]: ...
 
     async def grade(self, assignment: dict[str, Any], photos: list[bytes], reglages: dict[str, Any]) -> dict[str, Any]: ...
@@ -143,6 +157,8 @@ class Service:
         self._tracking_failed_at: dict[int, datetime] = {}
         self._fiche_attempt: dict[str, datetime] = {}
         self._fiche_lock = asyncio.Lock()
+        self._plan_lock = asyncio.Lock()
+        self._plan_attempt: datetime | None = None
         if not self.db.get_programme():
             self.db.set_programme(DEFAULT_PROGRAMME, self.now())
 
@@ -208,6 +224,98 @@ class Service:
     def prof_link(self) -> str:
         base = self.db.get_kv("public_base_url") or "https://VOTRE-SERVEUR"
         return f"{base}/prof#k={self.prof_token()}"
+
+    # --- objectif et plan -----------------------------------------------------
+
+    def objectif(self) -> dict[str, Any] | None:
+        raw = self.db.get_kv("objectif")
+        return json.loads(raw) if raw else None
+
+    def plan(self) -> dict[str, Any] | None:
+        raw = self.db.get_kv("plan")
+        return json.loads(raw) if raw else None
+
+    def set_objectif(self, depart: str, objectif: str, echeance: str, minutes_max: int) -> dict[str, Any]:
+        depart, objectif = depart.strip(), objectif.strip()
+        if not depart or not objectif:
+            raise ValueError("Le point de départ et l'objectif sont obligatoires.")
+        try:
+            fin = Date.fromisoformat(echeance)
+        except ValueError as e:
+            raise ValueError("Échéance invalide (format AAAA-MM-JJ).") from e
+        if fin <= self.now().date():
+            raise ValueError("L'échéance doit être dans le futur.")
+        if not 10 <= int(minutes_max) <= 180:
+            raise ValueError("Le temps par jour doit être compris entre 10 et 180 minutes.")
+        value = {"depart": depart, "objectif": objectif, "echeance": fin.isoformat(), "minutes_max": int(minutes_max)}
+        self.db.set_kv("objectif", json.dumps(value, ensure_ascii=False))
+        return value
+
+    def clear_objectif(self) -> None:
+        self.db.execute("DELETE FROM kv WHERE key IN ('objectif', 'plan')")
+
+    async def replan(self) -> dict[str, Any]:
+        """(Re)calcule le plan à partir de l'objectif, du carnet et de l'historique."""
+        objectif = self.objectif()
+        if not objectif:
+            raise ValueError("Aucun objectif défini.")
+        async with self._plan_lock:
+            self._plan_attempt = self.now()
+            plan = await self.tutor.make_plan(
+                {**objectif, "jours_restants": (Date.fromisoformat(objectif["echeance"]) - self.now().date()).days},
+                self.today(),
+                self.db.get_programme(),
+                self.progression(),
+                [self._history_entry(h) for h in self.db.recent_history(20)],
+                self.plan(),
+            )
+            for semaine in plan["semaines"]:
+                semaine["minutes_par_jour"] = max(10, min(int(semaine["minutes_par_jour"]), objectif["minutes_max"]))
+            plan["genere_le"] = self.now().isoformat()
+            self.db.set_kv("plan", json.dumps(plan, ensure_ascii=False))
+        await self.notify_profs(f"🎯 Plan mis à jour : {objectif['objectif']}\n\n{self._plan_text()}")
+        return plan
+
+    async def _replan_safely(self) -> None:
+        try:
+            await self.replan()
+        except Exception:
+            log.exception("Calcul du plan impossible")
+
+    def plan_du_jour(self) -> dict[str, Any] | None:
+        """Ce que le devoir du jour doit servir : objectif, phase et semaine en cours."""
+        objectif, plan = self.objectif(), self.plan()
+        if not objectif or not plan:
+            return None
+        today = self.today()
+        phase = next((p for p in plan["phases"] if p["debut"] <= today <= p["fin"]), None)
+        semaines = sorted((w for w in plan["semaines"] if w["debut"] <= today), key=lambda w: w["debut"])
+        semaine = semaines[-1] if semaines and today < (
+            Date.fromisoformat(semaines[-1]["debut"]) + timedelta(days=7)
+        ).isoformat() else None
+        return {
+            "objectif": objectif["objectif"],
+            "echeance": objectif["echeance"],
+            "jours_restants": (Date.fromisoformat(objectif["echeance"]) - self.now().date()).days,
+            "phase": phase,
+            "semaine": semaine,
+        }
+
+    def _plan_text(self) -> str:
+        objectif, plan = self.objectif(), self.plan()
+        if not objectif:
+            return "Aucun objectif défini. Réglez-le dans l'interface professeur (/prof) ou décrivez-le à l'IA."
+        if not plan:
+            return f"Objectif : {objectif['objectif']} (échéance {objectif['echeance']}). Plan en cours de calcul."
+        jour = self.plan_du_jour() or {}
+        text = f"Objectif : {objectif['objectif']} · échéance {objectif['echeance']} (J-{jour.get('jours_restants', '?')})"
+        text += f"\n\nRéalisme : {plan['realisme']}"
+        if jour.get("phase"):
+            text += f"\n\nPhase en cours : {jour['phase']['titre']} ({jour['phase']['debut']} → {jour['phase']['fin']})"
+        if jour.get("semaine"):
+            w = jour["semaine"]
+            text += f"\nCette semaine : {w['theme']} · {w['minutes_par_jour']} min/jour\n{w['objectif']}"
+        return text
 
     # --- carnet de progression -------------------------------------------------
 
@@ -331,6 +439,7 @@ class Service:
                 "titre": today["titre"],
                 "notions": json.loads(today["notions"]),
                 "enonce": today["enonce"],
+                "cours": today["cours"],
                 "corrige": today["corrige"],
                 "duree_min": today["duree_min"],
             } if today else None,
@@ -341,6 +450,9 @@ class Service:
                 "rapport_ia": json.loads(latest["llm_report"]) if latest["llm_report"] else None,
             } if latest else None,
             "reglages": self.reglages(),
+            "objectif": self.objectif(),
+            "plan": self.plan(),
+            "plan_du_jour": self.plan_du_jour(),
             "progression": self.progression(),
             "fiches": self.db.list_fiches(),
             "programme": self.db.get_programme(),
@@ -361,13 +473,18 @@ class Service:
             self._last_generation_attempt[date] = self.now()
             history = [self._history_entry(h) for h in self.db.recent_history(15)]
             suggestion = self.db.suggestion_for(date)
+            plan_du_jour = self.plan_du_jour()
+            reglages = self.reglages()
+            if plan_du_jour and plan_du_jour.get("semaine"):
+                reglages["duree_min"] = plan_du_jour["semaine"]["minutes_par_jour"]
             data = await self.tutor.generate_assignment(
                 self.db.get_programme(),
                 history,
-                self.reglages(),
+                reglages,
                 consignes=consignes,
                 sujet=suggestion["texte"] if suggestion else None,
                 progression=self.progression(),
+                plan_du_jour=plan_du_jour,
             )
             if suggestion:
                 self.db.mark_suggestion_used(suggestion["id"], date)
@@ -419,18 +536,33 @@ class Service:
                 "Vous pouvez aussi débloquer le téléphone avec /debloquer."
             )
 
+    def _objectif_eleve(self) -> dict[str, Any] | None:
+        """Ce que l'élève voit de son objectif : cap, compte à rebours, objectif de la semaine."""
+        jour = self.plan_du_jour()
+        if not jour:
+            return None
+        semaine = jour.get("semaine")
+        return {
+            "objectif": jour["objectif"],
+            "echeance": jour["echeance"],
+            "jours_restants": jour["jours_restants"],
+            "semaine": {"theme": semaine["theme"], "objectif": semaine["objectif"]} if semaine else None,
+        }
+
     def device_state(self) -> dict[str, Any]:
-        """État renvoyé à l'app iPhone."""
+        """État renvoyé à la page élève."""
         date = self.today()
         assignment = self.db.get_assignment(date)
         if not assignment:
             self._schedule_generation_if_needed()
-            return {"date": date, "status": "en_preparation"}
+            return {"date": date, "status": "en_preparation", "objectif": self._objectif_eleve()}
         state: dict[str, Any] = {
             "date": date,
             "titre": assignment["titre"],
             "enonce": assignment["enonce"],
+            "cours": assignment["cours"],
             "duree_min": assignment["duree_min"],
+            "objectif": self._objectif_eleve(),
         }
         latest = self.db.latest_submission(assignment["id"])
         if latest and latest["status"] != "remplacee":
@@ -626,6 +758,22 @@ class Service:
             ):
                 self._spawn(self._weekly_sheet_safely())
 
+        # Plan : révision hebdomadaire (dimanche soir), ou tout de suite s'il ne couvre plus la semaine.
+        if self.objectif() and not self._plan_lock.locked():
+            plan = self.plan()
+            last = self._plan_attempt
+            throttled = last is not None and now - last < PLAN_RETRY
+            stale = plan is None or not (self.plan_du_jour() or {}).get("semaine")
+            sunday_due = (
+                now.weekday() == PLAN_WEEKDAY
+                and now.hour >= PLAN_HOUR
+                and plan is not None
+                and plan.get("genere_le", "")[:10] < now.date().isoformat()
+            )
+            if (stale or sunday_due) and not throttled:
+                self._plan_attempt = now
+                self._spawn(self._replan_safely())
+
     # --- Telegram -------------------------------------------------------------
 
     async def handle_update(self, update: dict[str, Any]) -> None:
@@ -725,6 +873,8 @@ class Service:
                     await self.bot.send_message(
                         chat_id, f"Sujet ajouté ({len(self.db.pending_suggestions())} en attente)."
                     )
+            elif command == "/objectif":
+                await self.bot.send_message(chat_id, self._plan_text())
             elif command == "/progression":
                 await self.bot.send_message(chat_id, self._progression_text())
             elif command == "/fiche":
@@ -803,6 +953,15 @@ class Service:
                 },
                 ensure_ascii=False,
             )
+        if name == "voir_plan":
+            return json.dumps({"objectif": self.objectif(), "plan": self.plan()}, ensure_ascii=False)
+        if name == "definir_objectif":
+            self.set_objectif(args["depart"], args["objectif"], args["echeance"], args["minutes_max"])
+            plan = await self.replan()
+            return f"Objectif enregistré et plan recalculé. Réalisme : {plan['realisme']}"
+        if name == "recalculer_plan":
+            plan = await self.replan()
+            return f"Plan recalculé. Réalisme : {plan['realisme']}"
         if name == "voir_progression":
             return json.dumps(self.progression(), ensure_ascii=False) if self.progression() else "(pas encore de suivi)"
         if name == "regler_niveau":

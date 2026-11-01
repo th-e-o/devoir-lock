@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS assignments (
     titre TEXT NOT NULL,
     notions TEXT NOT NULL,          -- JSON list
     enonce TEXT NOT NULL,           -- Markdown + LaTeX, montré à l'élève
+    cours TEXT NOT NULL DEFAULT '', -- rappel de cours, montré à l'élève
     corrige TEXT NOT NULL,          -- jamais envoyé au téléphone
     criteres TEXT NOT NULL,         -- JSON list
     duree_min INTEGER NOT NULL,
@@ -81,6 +82,10 @@ class Database:
         self._lock = threading.Lock()
         with self._lock:
             self._conn.executescript(SCHEMA)
+            # Bases créées par une version précédente
+            columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(assignments)")}
+            if "cours" not in columns:
+                self._conn.execute("ALTER TABLE assignments ADD COLUMN cours TEXT NOT NULL DEFAULT ''")
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         with self._lock:
@@ -129,10 +134,10 @@ class Database:
     def upsert_assignment(self, date: str, data: dict[str, Any], now: datetime) -> None:
         self.execute(
             """
-            INSERT INTO assignments(date, titre, notions, enonce, corrige, criteres, duree_min, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO assignments(date, titre, notions, enonce, cours, corrige, criteres, duree_min, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(date) DO UPDATE SET
-                titre = excluded.titre, notions = excluded.notions, enonce = excluded.enonce,
+                titre = excluded.titre, notions = excluded.notions, enonce = excluded.enonce, cours = excluded.cours,
                 corrige = excluded.corrige, criteres = excluded.criteres,
                 duree_min = excluded.duree_min, created_at = excluded.created_at,
                 status = 'a_faire', validated_by = NULL, validated_at = NULL
@@ -142,6 +147,7 @@ class Database:
                 data["titre"],
                 json.dumps(data["notions"], ensure_ascii=False),
                 data["enonce"],
+                data.get("cours", ""),
                 data["corrige"],
                 json.dumps(data["criteres_validation"], ensure_ascii=False),
                 int(data["duree_estimee_min"]),

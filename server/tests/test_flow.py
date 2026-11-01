@@ -29,12 +29,16 @@ class FakeTutor:
         self.reglages = []
         self.programmes = []
         self.progressions_vues = []
+        self.plans_vus = []
+        self.plans_calcules = []
         self.grades = 0
         self.seances = []
         self.fiches = []
 
-    async def generate_assignment(self, programme, history, reglages, consignes=None, sujet=None, progression=None):
+    async def generate_assignment(self, programme, history, reglages, consignes=None, sujet=None, progression=None,
+                                  plan_du_jour=None):
         self.progressions_vues.append(progression)
+        self.plans_vus.append(plan_du_jour)
         self.generated += 1
         self.consignes.append(consignes)
         self.sujets.append(sujet)
@@ -44,10 +48,23 @@ class FakeTutor:
             "titre": f"Suites récurrentes #{self.generated}",
             "notions": ["suites"],
             "enonce": "Soit $u_{n+1} = \\sqrt{2 + u_n}$...",
+            "cours": "Théorème du point fixe : si $u_n \\to \\ell$ et $f$ continue, $f(\\ell) = \\ell$.",
             "corrige": "On montre que $u_n \\to 2$.",
             "criteres_validation": ["Q1 et Q2 traitées"],
             "duree_estimee_min": 45,
         }
+
+    async def make_plan(self, objectif, aujourd_hui, programme, progression, historique, plan_precedent):
+        self.plans_calcules.append((objectif, aujourd_hui, plan_precedent))
+        lundi = datetime.fromisoformat(aujourd_hui).date()
+        lundi -= timedelta(days=lundi.weekday())
+        semaines = [{"debut": (lundi + timedelta(weeks=i)).isoformat(), "theme": f"Thème {i}",
+                     "notions": ["sommes"], "difficulte": 2 + i // 3, "minutes_par_jour": 45 if i else 40,
+                     "objectif": f"Objectif {i}"} for i in range(6)]
+        return {"strategie": "Monter progressivement", "realisme": "Ambitieux mais possible",
+                "phases": [{"titre": "Bases", "debut": aujourd_hui, "fin": objectif["echeance"],
+                            "objectif": "Consolider", "chapitres": ["sommes"], "difficulte": 2}],
+                "semaines": semaines, "jalons": [{"date": objectif["echeance"], "intitule": "Concours", "critere": "Admis"}]}
 
     async def update_progress(self, progression, seance, reglages):
         self.seances.append(seance)
@@ -465,3 +482,73 @@ async def test_weekly_sheet(env):
     # Régénération manuelle : remplace la fiche de la semaine.
     assert client.post("/api/prof/fiche", headers=prof).status_code == 200
     assert len(client.get("/api/fiches", headers=AUTH).json()) == 1
+
+
+async def test_goal_plan_drives_daily_homework(env):
+    service, tutor, bot, clock, client = env
+    prof = {"Authorization": f"Bearer {service.prof_token()}"}
+    goal = {"depart": "début de MPSI", "objectif": "intégrer l'X", "echeance": "2028-04-15", "minutes_max": 40}
+    assert client.put("/api/prof/objectif", headers=prof, json={**goal, "echeance": "2020-01-01"}).status_code == 400
+    r = client.put("/api/prof/objectif", headers=prof, json=goal)
+    assert r.status_code == 200, r.text
+    overview = r.json()
+    assert overview["objectif"]["objectif"] == "intégrer l'X"
+    assert overview["plan_du_jour"]["semaine"]["theme"] == "Thème 0"
+    # minutes_par_jour plafonné au temps disponible (45 demandé par le plan, 40 disponibles)
+    assert all(w["minutes_par_jour"] <= 40 for w in overview["plan"]["semaines"])
+    assert any("Plan mis à jour" in m["text"] for m in bot.sent)
+
+    await service.ensure_today_assignment()
+    vu = tutor.plans_vus[-1]
+    assert vu["semaine"]["theme"] == "Thème 0" and vu["jours_restants"] > 500
+    assert tutor.reglages[-1]["duree_min"] == 40
+
+    etat = client.get("/api/today", headers=AUTH).json()
+    assert etat["objectif"]["semaine"]["theme"] == "Thème 0" and etat["cours"].startswith("Théorème")
+    assert "corrige" not in etat and "realisme" not in json.dumps(etat)
+
+    # Semaine suivante : le plan suit.
+    clock.now += timedelta(days=7)
+    await service.ensure_today_assignment()
+    assert tutor.plans_vus[-1]["semaine"]["theme"] == "Thème 1"
+
+    # Dimanche 19 h : révision hebdomadaire, une seule fois, avec le plan précédent.
+    n = len(tutor.plans_calcules)
+    clock.now = datetime(2026, 11, 8, 19, 30, tzinfo=TZ)
+    await service.tick()
+    await service.wait_background()
+    assert len(tutor.plans_calcules) == n + 1 and tutor.plans_calcules[-1][2] is not None
+    await service.tick()
+    await service.wait_background()
+    assert len(tutor.plans_calcules) == n + 1
+
+    await message(service, "/objectif")
+    assert "intégrer l'X" in bot.sent[-1]["text"] and "Réalisme" in bot.sent[-1]["text"]
+
+    # Plan périmé (plus aucune semaine ne couvre aujourd'hui) : recalcul automatique.
+    clock.now += timedelta(weeks=8)
+    await service.tick()
+    await service.wait_background()
+    assert len(tutor.plans_calcules) == n + 2
+
+    assert client.delete("/api/prof/objectif", headers=prof).json()["objectif"] is None
+    clock.now += timedelta(days=1)
+    await service.ensure_today_assignment()
+    assert tutor.plans_vus[-1] is None and tutor.reglages[-1]["duree_min"] == 30
+
+
+def test_old_database_gets_course_column(tmp_path):
+    import sqlite3
+    from app.db import Database
+    path = tmp_path / "ancienne.sqlite3"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE assignments (id INTEGER PRIMARY KEY, date TEXT UNIQUE, titre TEXT NOT NULL, "
+                 "notions TEXT NOT NULL, enonce TEXT NOT NULL, corrige TEXT NOT NULL, criteres TEXT NOT NULL, "
+                 "duree_min INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'a_faire', validated_by TEXT, "
+                 "validated_at TEXT, created_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO assignments(date, titre, notions, enonce, corrige, criteres, duree_min, created_at) "
+                 "VALUES('2026-10-30', 't', '[]', 'e', 'c', '[]', 45, 'x')")
+    conn.commit()
+    conn.close()
+    db = Database(path)
+    assert db.get_assignment("2026-10-30")["cours"] == ""
